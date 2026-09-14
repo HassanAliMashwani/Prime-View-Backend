@@ -1,0 +1,67 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Body,
+  Query,
+  UseGuards,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import { ReceiptsService } from './receipts.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
+import { CurrentSession } from '../common/decorators/current-session.decorator';
+import { SubmitReceiptDto } from './dto/submit-receipt.dto';
+import { VerifyReceiptDto } from './dto/verify-receipt.dto';
+import { RejectReceiptDto } from './dto/reject-receipt.dto';
+
+@Controller('receipts')
+@UseGuards(JwtAuthGuard, PermissionScopeGuard)
+export class ReceiptsController {
+  constructor(private readonly receiptsService: ReceiptsService) {}
+
+  @Post()
+  @HttpCode(HttpStatus.CREATED)
+  async submitReceipt(
+    @Body() dto: SubmitReceiptDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.submitPaymentReceipt(dto, session);
+  }
+
+  @Get()
+  async getAdminReceipts(
+    @Query('status') status: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.getAdminReceipts(status, session);
+  }
+
+  @Get('me')
+  async getCustomerReceipts(@CurrentSession() session: any) {
+    const customerId = session.customerId || session.id;
+    return this.receiptsService.getCustomerReceipts(customerId);
+  }
+
+  @Post(':id/verify')
+  @HttpCode(HttpStatus.OK)
+  async verifyReceipt(
+    @Param('id') id: string,
+    @Body() dto: VerifyReceiptDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.verifyReceipt(id, dto, session);
+  }
+
+  @Post(':id/reject')
+  @HttpCode(HttpStatus.OK)
+  async rejectReceipt(
+    @Param('id') id: string,
+    @Body() dto: RejectReceiptDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.rejectReceipt(id, dto, session);
+  }
+}

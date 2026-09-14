@@ -1,0 +1,3 @@
+ALTER TABLE "AuditEntry"  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "AuditEntry"  FORCE ROW LEVEL SECURITY;
+CREATE POLICY audit_entry_allow_all ON "AuditEntry" FOR ALL USING (true) WITH CHECK (true);

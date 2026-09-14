@@ -1,0 +1,368 @@
+// ─────────────────────────────────────────────
+// datasource — two URLs required:
+//   DATABASE_URL  : pooled (port 6543, pgbouncer) — used by the app at runtime
+//   DIRECT_URL    : direct (port 5432, non-pooled) — used ONLY by prisma migrate dev
+// ─────────────────────────────────────────────
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ── Enums ──
+enum AdminRole {
+  super_admin
+  sub_admin
+}
+
+enum PlotCategory {
+  residential
+  commercial
+  farm_house
+  amenity
+}
+
+enum PlotStatus {
+  available
+  reserved
+  booked
+}
+
+enum ReservationStatus {
+  active
+  confirmed
+  superseded
+  expired
+  cancelled
+}
+
+enum PaymentType {
+  installment
+  one_time
+}
+
+enum FeeType {
+  admission_fee
+  share_subscription_fee
+  plot_downpayment
+  plot_installment
+  plot_one_time
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  overdue
+}
+
+enum AccountStatus {
+  active
+  suspended
+  pending
+}
+
+enum RegistrationStatus {
+  minimal
+  complete
+}
+
+enum ReceiptStatus {
+  pending
+  verified
+  rejected
+}
+
+enum DocumentType {
+  applicant_photo
+  cnic_copy
+  nok_cnic_copy
+  other
+}
+
+enum GeneratedDocType {
+  booking_confirmation
+  payment_receipt
+  booking_agreement
+  installment_schedule
+}
+
+enum ContentSection {
+  plans
+  events
+}
+
+// ── 1. Core Society Structure ──
+model Block {
+  id          String            @id // 'abbott', 'royal', etc.
+  name        String
+  description String?
+  totalPlots  Int?
+  plots       Plot[]
+  assignments BlockAssignment[]
+}
+
+model Plot {
+  id               String        @id @default(uuid())
+  blockId          String
+  block            Block         @relation(fields: [blockId], references: [id])
+  plotNumber       String
+  plotType         String // '5_marla', '2_kanal', 'commercial_25x40', etc.
+  category         PlotCategory
+  amenityName      String?
+  size             String
+  price            Decimal       @db.Decimal(14, 2)
+  status           PlotStatus    @default(available)
+  isAdjustment     Boolean       @default(false)
+  adjustmentReason String?
+  adjustmentDate   DateTime?
+  adjustmentBy     String?
+  currentOwnerId   String?
+  currentOwner     Customer?     @relation(fields: [currentOwnerId], references: [id])
+  lockedBy         String?
+  lockedAt         DateTime?
+  reservations     Reservation[]
+  bookings         Booking[]
+  version          Int           @default(0) // optimistic concurrency guard
+
+  @@unique([blockId, plotNumber])
+  @@index([blockId, status])
+  @@index([status])
+}
+
+// ── 2. Admin & Permissions ──
+model AdminUser {
+  id                  String            @id @default(uuid())
+  username            String            @unique
+  email               String            @unique
+  fullName            String
+  passwordHash        String
+  role                AdminRole
+  status              String            @default("active")
+  permissions         Json // { can_reserve, can_book, can_create_customer, can_edit_content, can_verify_receipts, can_view_customers }
+  failedLoginAttempts Int               @default(0)
+  lockedUntil         DateTime?
+  assignments         BlockAssignment[]
+  createdDate         DateTime          @default(now())
+  lastLogin           DateTime?
+}
+
+model BlockAssignment {
+  id      String    @id @default(uuid())
+  adminId String
+  admin   AdminUser @relation(fields: [adminId], references: [id])
+  blockId String
+  block   Block     @relation(fields: [blockId], references: [id])
+
+  @@unique([adminId, blockId])
+}
+
+// ── 3. Customers ──
+model Customer {
+  id                  String              @id @default(uuid())
+  membershipNo        String?             @unique // null until registrationStatus = complete
+  registrationStatus  RegistrationStatus  @default(minimal)
+  fullName            String
+  fatherOrHusbandName String?
+  cnic                String
+  city                String?
+  email               String?
+  phone               String?
+  mailingAddress      String?
+  nokName             String?
+  nokCnic             String?
+  accountStatus       AccountStatus       @default(active)
+  passwordHash        String? // null until portal credentials issued
+  credentialsPending  Boolean             @default(true)
+  termsAccepted       Boolean             @default(false)
+  termsAcceptedAt     DateTime?
+  strikeCount         Int                 @default(0)
+  failedLoginAttempts Int                 @default(0)
+  lockedUntil         DateTime?
+  createdDate         DateTime            @default(now())
+  lastLogin           DateTime?
+  plots               Plot[]
+  bookings            Booking[]
+  reservations        Reservation[]
+  documents           CustomerDocument[]
+  societyDocuments    SocietyDocument[]
+  strikes             CustomerStrike[]
+  receipts            ReceiptSubmission[]
+
+  @@index([cnic])
+}
+
+model CustomerStrike {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  reason     String
+  receiptId  String?
+  assignedBy String
+  assignedAt DateTime @default(now())
+}
+
+// ── 4. Reservations & Bookings ──
+model Reservation {
+  id                    String            @id @default(uuid())
+  plotId                String
+  plot                  Plot              @relation(fields: [plotId], references: [id])
+  customerName          String
+  customerPhone         String
+  customerEmail         String?
+  tokenFee              Decimal           @db.Decimal(12, 2)
+  validUntil            DateTime
+  reservedByAdminId     String
+  reservedByAdminName   String
+  status                ReservationStatus @default(active)
+  createdAt             DateTime          @default(now())
+  confirmedAt           DateTime?
+  confirmedByBookingId  String?
+  supersededAt          DateTime?
+  supersededByBookingId String?
+  cancelledAt           DateTime?
+  cancelledByAdminId    String?
+  resolutionNote        String?
+  Customer              Customer?         @relation(fields: [customerId], references: [id])
+  customerId            String?
+
+  @@index([plotId, status])
+}
+
+model Booking {
+  id                  String             @id @default(uuid())
+  customerId          String
+  customer            Customer           @relation(fields: [customerId], references: [id])
+  plotId              String
+  plot                Plot               @relation(fields: [plotId], references: [id])
+  paymentType         PaymentType
+  status              String             @default("active")
+  registrationStatus  RegistrationStatus @default(minimal)
+  bookingDate         DateTime           @default(now())
+  confirmationDate    DateTime?
+  paperInstallmentRef String?
+  installmentPlan     Json? // { totalPayment, downpayment, planYears, paidAfterEveryMonths, numberOfInstallments }
+  createdByAdminId    String
+  payments            PaymentRecord[]
+  societyDocuments    SocietyDocument[]
+
+  @@index([customerId])
+}
+
+model PaymentRecord {
+  id                String        @id @default(uuid())
+  bookingId         String
+  booking           Booking       @relation(fields: [bookingId], references: [id])
+  feeType           FeeType
+  installmentNumber Int?
+  dueDate           DateTime?
+  amount            Decimal       @db.Decimal(14, 2)
+  paidAmount        Decimal       @default(0) @db.Decimal(14, 2)
+  status            PaymentStatus @default(pending)
+
+  @@index([bookingId, feeType])
+}
+
+// ── 5. Receipts / Financial Verification ──
+model ReceiptSubmission {
+  id                String        @id @default(uuid())
+  customerId        String
+  customer          Customer      @relation(fields: [customerId], references: [id])
+  bookingId         String
+  paymentRecordId   String?
+  depositoryBank    String
+  transactionRef    String
+  paymentDate       DateTime
+  amount            Decimal       @db.Decimal(14, 2)
+  receiptFileUrl    String // real object storage URL in production
+  status            ReceiptStatus @default(pending)
+  verifiedByAdminId String?
+  verifiedAt        DateTime?
+  rejectionReason   String?
+  slipNumber        String?       @unique
+  securityHash      String?
+  uploadedAt        DateTime      @default(now())
+
+  @@index([customerId, status])
+}
+
+// ── 6. Physical Customer Documents (uploaded by admin) ──
+model CustomerDocument {
+  id           String       @id @default(uuid())
+  customerId   String
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  bookingId    String?
+  type         DocumentType
+  label        String? // required when type = other
+  fileUrl      String // real object storage URL
+  fileName     String
+  fileSizeKb   Int
+  uploadedAt   DateTime     @default(now())
+  uploadedById String
+}
+
+// ── 7. System-Generated Documents
+// Name intentionally kept as SocietyDocument — 1:1 translation of the existing mock type
+// `src/lib/mock/types.ts → interface SocietyDocument`. Not renamed to GeneratedDocument.
+// These are records the system creates automatically on booking (booking_confirmation,
+// booking_agreement, payment_receipt, installment_schedule) — never uploaded by a user.
+//
+// DEVIATION — enum split (flagged per translation-not-redesign rule):
+// The mock source's `DocumentType` field mixes both physical-upload and system-generated
+// values into one enum. This schema deliberately splits it into two enums:
+//   DocumentType     → physical uploads (applicant_photo, cnic_copy, nok_cnic_copy, other)
+//   GeneratedDocType → system-generated (booking_confirmation, payment_receipt,
+//                      booking_agreement, installment_schedule)
+// This is a deliberate normalization, not a literal 1:1 field-type translation.
+// Founder-visible disclosure: the model name is kept original; the enum field type is not.
+model SocietyDocument {
+  id         String           @id @default(uuid())
+  customerId String
+  customer   Customer         @relation(fields: [customerId], references: [id])
+  bookingId  String
+  booking    Booking          @relation(fields: [bookingId], references: [id])
+  type       GeneratedDocType
+  fileName   String
+  fileUrl    String // object storage URL in production; mockFileUrl in prototype
+  fileSizeKb Int
+  uploadedAt DateTime         @default(now())
+
+  @@index([customerId])
+  @@index([bookingId])
+}
+
+// ── 8. Content CMS ──
+model ContentBlock {
+  id             String         @id @default(uuid())
+  section        ContentSection
+  title          String
+  subtitle       String?
+  content        String
+  metadata       Json // { price, size, date, location, imageUrl, galleryImages, featured, tags }
+  lockedBy       String?
+  lockedAt       DateTime?
+  lastModifiedBy String?
+  lastModifiedAt DateTime?
+}
+
+// ── 9. Audit Log — immutable ──
+model AuditEntry {
+  id         String   @id @default(uuid())
+  timestamp  DateTime @default(now())
+  actorId    String
+  actorName  String
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  details    String
+  oldValue   Json?
+  newValue   Json?
+
+  @@index([timestamp])
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
