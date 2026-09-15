@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/sweep/cron",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

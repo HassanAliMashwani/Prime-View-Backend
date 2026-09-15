@@ -1,4 +1,4 @@
-import { Controller, Get, Post, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, UseGuards, ForbiddenException, Headers, UnauthorizedException } from '@nestjs/common';
 import { SweepService } from './sweep.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
@@ -16,6 +16,20 @@ export class SweepController {
     };
   }
 
+  @Get('cron')
+  async triggerCronSweep(@Headers('authorization') authHeader?: string) {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const result = await this.sweepService.runSweep();
+    return {
+      ok: true,
+      data: result,
+      status: this.sweepService.getStatus(),
+    };
+  }
+
   @Post('run')
   @UseGuards(JwtAuthGuard, PermissionScopeGuard)
   async triggerManualSweep(@CurrentSession() session: any) {
@@ -30,3 +44,4 @@ export class SweepController {
     };
   }
 }
+
