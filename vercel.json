@@ -1,19 +1,9 @@
 {
   "version": 2,
-  "buildCommand": "npx prisma generate && npx nest build",
-  "builds": [
-    {
-      "src": "dist/api/index.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": ["dist/**", "prisma/**", "node_modules/.prisma/**"]
-      }
-    }
-  ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "dist/api/index.js"
+      "dest": "/api/index.js"
     }
   ],
   "crons": [
