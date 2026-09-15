@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Vercel Serverless Entry Point for NestJS.
  *
  * Vercel does NOT support long-running servers (app.listen).
@@ -7,8 +7,8 @@
  */
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from '../src/app.module';
-import { TypedErrorFilter } from '../src/common/filters/typed-error.filter';
+import { AppModule } from './app.module';
+import { TypedErrorFilter } from './common/filters/typed-error.filter';
 import type { IncomingMessage, ServerResponse } from 'http';
 
 let app: NestExpressApplication | undefined;

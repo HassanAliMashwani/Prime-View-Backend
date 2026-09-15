@@ -1,11 +1,7 @@
 ﻿/**
  * Vercel Serverless Shim for NestJS.
- *
- * This plain JS file is committed to the repo and auto-discovered by Vercel
- * as a serverless function. It delegates to the compiled NestJS app in dist/.
- *
- * dist/ is created at deploy-time by the "vercel-build" script in package.json:
- *   "vercel-build": "npx prisma generate && npx nest build"
+ * Delegates to the compiled NestJS handler in dist/serverless.js
+ * (compiled from src/serverless.ts by nest build / vercel-build).
  */
-const { default: handler } = require('../dist/api/index');
+const { default: handler } = require('../dist/serverless');
 module.exports = handler;
