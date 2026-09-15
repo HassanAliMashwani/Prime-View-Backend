@@ -1,9 +1,18 @@
 {
   "version": 2,
+  "builds": [
+    {
+      "src": "src/serverless.ts",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["prisma/**", "node_modules/.prisma/**"]
+      }
+    }
+  ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/api/index.js"
+      "dest": "src/serverless.ts"
     }
   ],
   "crons": [
