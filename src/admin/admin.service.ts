@@ -19,6 +19,27 @@ export class AdminService {
   ) {}
 
   /**
+   * GET /admin/audit
+   * Retrieve system activity audit logs (Super Admin exclusive).
+   */
+  async getAuditLogs(session: any) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Audit log inspection is strictly restricted to Super Administrators.',
+      });
+    }
+
+    const logs = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.auditEntry.findMany({
+        orderBy: { timestamp: 'desc' },
+      });
+    });
+
+    return { ok: true, logs, totalCount: logs.length };
+  }
+
+  /**
    * 1. GET /admin/sub-admins
    * Retrieve all Sub Administrators (Super Admin exclusive).
    */

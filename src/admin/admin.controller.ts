@@ -26,6 +26,11 @@ export class AdminController {
     return this.adminService.getSubAdmins(session);
   }
 
+  @Get('audit')
+  async getAuditLogs(@CurrentSession() session: any) {
+    return this.adminService.getAuditLogs(session);
+  }
+
   @Post('sub-admins')
   @HttpCode(HttpStatus.CREATED)
   async createSubAdmin(

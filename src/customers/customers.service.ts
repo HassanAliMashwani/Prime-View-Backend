@@ -21,6 +21,7 @@ import { CompleteRegistrationDto } from './dto/complete-registration.dto';
 import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking.dto';
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
+import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 
 @Injectable()
 export class CustomersService {
@@ -202,7 +203,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession(session, async (tx) => {
+    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
       return tx.customer.findUnique({
         where: { id },
         include: {
@@ -1287,4 +1288,177 @@ export class CustomersService {
       message: `Customer account successfully ${dto.action === 'suspend' ? 'suspended' : 'reactivated'}.`,
     };
   }
+
+  /**
+   * POST /customers/:id/documents
+   * Manual upload / attachment of CustomerDocument (can_create_customer or Super Admin).
+   */
+  async uploadDocument(customerId: string, dto: UploadCustomerDocumentDto, session: any) {
+    const isSuper = session.role === 'super_admin';
+    const hasPerm = isSuper || Boolean(session.permissions?.can_create_customer);
+    if (!hasPerm) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to upload customer documents.',
+      });
+    }
+
+    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+      return tx.customer.findUnique({
+        where: { id: customerId },
+        include: { bookings: { include: { plot: true } } },
+      });
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    if (!isSuper) {
+      let blockIdToCheck: string | undefined;
+      if (dto.bookingId) {
+        const b = customer.bookings.find((bk) => bk.id === dto.bookingId);
+        if (b) blockIdToCheck = b.plot.blockId;
+      } else if (customer.bookings.length > 0) {
+        blockIdToCheck = customer.bookings[0].plot.blockId;
+      }
+
+      if (blockIdToCheck && !session.assignedBlocks?.includes(blockIdToCheck)) {
+        throw new ForbiddenException({
+          error: 'OUT_OF_SCOPE',
+          message: 'Customer booking is outside your assigned administrative scope.',
+        });
+      }
+    }
+
+    if (dto.type === DocumentType.other && (!dto.label || !dto.label.trim())) {
+      throw new BadRequestException({
+        error: 'LABEL_REQUIRED',
+        message: 'A descriptive label is required when document type is "other".',
+      });
+    }
+
+    const doc = await this.prisma.withScopedSession(session, async (tx) => {
+      const created = await tx.customerDocument.create({
+        data: {
+          customerId: customer.id,
+          bookingId: dto.bookingId || null,
+          type: dto.type,
+          label: dto.type === DocumentType.other ? dto.label?.trim() : null,
+          fileUrl: dto.fileUrl,
+          fileName: dto.fileName,
+          fileSizeKb: dto.fileSizeKb || 1,
+          uploadedById: session.adminId || session.id || session.username || 'admin',
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.id || session.username || 'admin',
+          actorName: session.fullName || session.username || 'Administrator',
+          actorRole: session.role || 'admin',
+          action: 'CUSTOMER_DOCUMENT_UPLOADED',
+          entityType: 'document',
+          entityId: created.id,
+          details: `Uploaded ${created.type} document "${created.fileName}" for Customer ${customer.fullName} (${customer.membershipNo || customer.id})`,
+        },
+      });
+
+      return created;
+    });
+
+    return { ok: true, document: doc };
+  }
+
+  /**
+   * DELETE /customers/:id/documents/:docId
+   * Delete CustomerDocument attachment (can_create_customer or Super Admin).
+   */
+  async deleteDocument(customerId: string | null, docId: string, session: any) {
+    const isSuper = session.role === 'super_admin';
+    const hasPerm = isSuper || Boolean(session.permissions?.can_create_customer);
+    if (!hasPerm) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to delete customer documents.',
+      });
+    }
+
+    const doc = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+      return tx.customerDocument.findUnique({
+        where: { id: docId },
+        include: { customer: { include: { bookings: { include: { plot: true } } } } },
+      });
+    });
+
+    if (!doc || (customerId && doc.customerId !== customerId)) {
+      throw new NotFoundException({
+        error: 'DOCUMENT_NOT_FOUND',
+        message: 'Document record not found.',
+      });
+    }
+
+    if (!isSuper) {
+      let blockIdToCheck: string | undefined;
+      if (doc.bookingId) {
+        const b = doc.customer.bookings.find((bk) => bk.id === doc.bookingId);
+        if (b) blockIdToCheck = b.plot.blockId;
+      } else if (doc.customer.bookings.length > 0) {
+        blockIdToCheck = doc.customer.bookings[0].plot.blockId;
+      }
+
+      if (blockIdToCheck && !session.assignedBlocks?.includes(blockIdToCheck)) {
+        throw new ForbiddenException({
+          error: 'OUT_OF_SCOPE',
+          message: 'Cannot delete document: Associated plot is outside your assigned administrative scope.',
+        });
+      }
+    }
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      await tx.customerDocument.delete({ where: { id: docId } });
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.id || session.username || 'admin',
+          actorName: session.fullName || session.username || 'Administrator',
+          actorRole: session.role || 'admin',
+          action: 'CUSTOMER_DOCUMENT_DELETED',
+          entityType: 'document',
+          entityId: docId,
+          details: `Deleted ${doc.type} document "${doc.fileName}" (ID: ${docId})`,
+        },
+      });
+    });
+
+    return { ok: true, message: 'Document deleted successfully.' };
+  }
+
+  /**
+   * POST /customers/:id/accept-terms
+   * Record customer terms and conditions acceptance upon first portal login.
+   */
+  async acceptTerms(id: string, session: any) {
+    if (session.role === 'customer' && session.customerId !== id) {
+      throw new ForbiddenException({
+        error: 'IDENTITY_REJECTED',
+        message: 'You can only accept terms for your own account.',
+      });
+    }
+
+    const updated = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+      return tx.customer.update({
+        where: { id },
+        data: {
+          termsAccepted: true,
+          termsAcceptedAt: new Date(),
+        },
+      });
+    });
+
+    return { ok: true, customer: updated };
+  }
 }
+

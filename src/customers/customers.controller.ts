@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -16,6 +17,7 @@ import { CompleteRegistrationDto } from './dto/complete-registration.dto';
 import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking.dto';
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
+import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 
 @Controller('customers')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -103,6 +105,40 @@ export class CustomersController {
     @CurrentSession() session: any,
   ) {
     return this.customersService.toggleSuspension(id, dto, session);
+  }
+
+  @Post(':id/documents')
+  async uploadDocument(
+    @Param('id') customerId: string,
+    @Body() dto: UploadCustomerDocumentDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.uploadDocument(customerId, dto, session);
+  }
+
+  @Delete('documents/:docId')
+  async deleteDocumentDirect(
+    @Param('docId') docId: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.deleteDocument(null, docId, session);
+  }
+
+  @Delete(':id/documents/:docId')
+  async deleteDocument(
+    @Param('id') customerId: string,
+    @Param('docId') docId: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.deleteDocument(customerId, docId, session);
+  }
+
+  @Post(':id/accept-terms')
+  async acceptTerms(
+    @Param('id') id: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.acceptTerms(id, session);
   }
 
   @Get(':id')
