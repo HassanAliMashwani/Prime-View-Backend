@@ -12,9 +12,13 @@ import { ContentModule } from './content/content.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { SweepModule } from './sweep/sweep.module';
 import { StorageModule } from './storage/storage.module';
-
+import { ThrottlerModule } from '@nestjs/throttler';
 @Module({
   imports: [
+    ThrottlerModule.forRoot([{
+      ttl: 60000,
+      limit: 10,
+    }]),
     RealtimeModule,
     AuthModule,
     BlocksModule,

@@ -521,4 +521,43 @@ export class ReceiptsService {
       strikeAssigned: result.strikeAssigned,
     };
   }
+  /**
+   * 6. GET /receipts/verify/:slipNumber (PUBLIC)
+   * Public endpoint to verify a receipt slip without authentication.
+   */
+  async publicVerifySlip(slipNumber: string) {
+    const receipt = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+      return tx.receiptSubmission.findUnique({
+        where: { slipNumber },
+        include: {
+          customer: {
+            select: { fullName: true }
+          }
+        },
+      });
+    });
+
+    if (!receipt) {
+      return { exists: false, status: 'not_found' };
+    }
+
+    // Mask customer name (e.g. "Usman K.")
+    let maskedName = 'Unknown';
+    if (receipt.customer?.fullName) {
+      const parts = receipt.customer.fullName.trim().split(/\s+/);
+      if (parts.length > 1) {
+        maskedName = `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
+      } else {
+        maskedName = `${parts[0]}`;
+      }
+    }
+
+    return {
+      exists: true,
+      status: receipt.status,
+      amount: receipt.amount,
+      paymentDate: receipt.paymentDate,
+      customerContext: maskedName,
+    };
+  }
 }

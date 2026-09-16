@@ -11,6 +11,14 @@ export class PermissionScopeGuard implements CanActivate {
     const params = request.params;
     const query = request.query;
     const requiredPermission = this.reflector.get<string>('permission', context.getHandler());
+    const isPublic = this.reflector.getAllAndOverride<boolean>('isPublic', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (isPublic) {
+      return true;
+    }
 
     if (!session) {
       return false; // Should be handled by JwtAuthGuard first
