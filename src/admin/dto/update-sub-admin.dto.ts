@@ -21,6 +21,7 @@ export class UpdateSubAdminDto {
     can_create_customer?: boolean;
     can_view_customers?: boolean;
     can_view_sales_reports?: boolean;
+    can_view_sales_history?: boolean;
     can_edit_content?: boolean;
     can_verify_receipts?: boolean;
   };

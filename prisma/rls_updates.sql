@@ -104,6 +104,12 @@ CREATE POLICY audit_entry_select_scope ON "AuditEntry"
   FOR SELECT
   USING (
     current_setting('app.current_role', true) = 'super_admin'
+    OR "actorId" = current_setting('app.current_admin_id', true)
+    OR "actorId" = current_setting('app.current_customer_id', true)
+    OR (
+      action = 'PLOT_BOOKED' 
+      AND current_setting('app.can_view_sales_history', true) = 'true'
+    )
   );
 
 -- Ensure Booking and PaymentRecord do not have RLS enabled (Evaluate requirement)

@@ -31,6 +31,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
                  set_config('app.can_create_customer', ${String(!!session.permissions?.can_create_customer)}, true),
                  set_config('app.can_book', ${String(!!session.permissions?.can_book)}, true),
                  set_config('app.can_reserve', ${String(!!session.permissions?.can_reserve)}, true),
+                 set_config('app.can_view_sales_history', ${String(!!session.permissions?.can_view_sales_history)}, true),
                  set_config('app.current_permissions', ${JSON.stringify(session.permissions || {})}, true);
         `;
         return callback(tx);

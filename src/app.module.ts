@@ -13,6 +13,8 @@ import { ReceiptsModule } from './receipts/receipts.module';
 import { SweepModule } from './sweep/sweep.module';
 import { StorageModule } from './storage/storage.module';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { SalesModule } from './sales/sales.module';
+
 @Module({
   imports: [
     ThrottlerModule.forRoot([{
@@ -31,6 +33,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     ReceiptsModule,
     SweepModule,
     StorageModule,
+    SalesModule,
   ],
   controllers: [],
   providers: [PrismaService],

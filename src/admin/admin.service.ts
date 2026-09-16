@@ -135,6 +135,7 @@ export class AdminService {
       can_view_sales_reports: Boolean(dto.permissions?.can_view_sales_reports),
       can_edit_content: Boolean(dto.permissions?.can_edit_content),
       can_verify_receipts: Boolean(dto.permissions?.can_verify_receipts),
+      can_view_sales_history: Boolean(dto.permissions?.can_view_sales_history),
     };
 
     const newAdminId = `admin-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
@@ -253,6 +254,7 @@ export class AdminService {
           can_view_sales_reports: Boolean(dto.permissions.can_view_sales_reports),
           can_edit_content: Boolean(dto.permissions.can_edit_content),
           can_verify_receipts: Boolean(dto.permissions.can_verify_receipts),
+          can_view_sales_history: Boolean(dto.permissions.can_view_sales_history),
         }
       : targetUser.permissions;
 
