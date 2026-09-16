@@ -16,19 +16,7 @@ export class SweepController {
     };
   }
 
-  @Get('cron')
-  async triggerCronSweep(@Headers('authorization') authHeader?: string) {
-    const cronSecret = process.env.CRON_SECRET;
-    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-      throw new UnauthorizedException('Unauthorized');
-    }
-    const result = await this.sweepService.runSweep();
-    return {
-      ok: true,
-      data: result,
-      status: this.sweepService.getStatus(),
-    };
-  }
+
 
   @Post('run')
   @UseGuards(JwtAuthGuard, PermissionScopeGuard)

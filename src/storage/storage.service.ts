@@ -92,7 +92,7 @@ export class StorageService {
       // Direct Supabase S3-compatible storage endpoint
       this.s3Client = new S3Client({
         region: 'ap-northeast-1',
-        endpoint: `https://${this.supabaseProjectRef}.supabase.co/storage/v1/s3`,
+        endpoint: `https://${this.supabaseProjectRef}.storage.supabase.co/storage/v1/s3`,
         credentials: {
           accessKeyId: r2AccessKey,
           secretAccessKey: r2SecretKey,

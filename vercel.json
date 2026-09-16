@@ -1,9 +1,0 @@
-{
-  "version": 2,
-  "crons": [
-    {
-      "path": "/sweep/cron",
-      "schedule": "0 0 * * *"
-    }
-  ]
-}
