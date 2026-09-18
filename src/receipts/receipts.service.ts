@@ -112,16 +112,28 @@ export class ReceiptsService {
         (p) => p.feeType === 'plot_one_time',
       );
 
-      if (targetPaymentRecord && targetPaymentRecord.status === 'paid') {
-        throw new ConflictException({
-          error: 'ALREADY_PAID',
-          message: 'This full payment has already been settled and marked paid in the society ledger.',
+      if (targetPaymentRecord) {
+        // Allow exactly ONE record receipt for an already-settled one-time payment
+        const existingRecordReceipt = await this.prisma.withScopedSession(session, async (tx) => {
+          return tx.receiptSubmission.findFirst({
+            where: {
+              bookingId: booking.id,
+              paymentRecordId: targetPaymentRecord.id,
+            },
+          });
         });
+
+        if (existingRecordReceipt) {
+          throw new ConflictException({
+            error: 'ALREADY_RECORDED',
+            message: 'A record receipt has already been submitted for this payment.',
+          });
+        }
       }
     }
 
     // Check for existing pending receipt submission
-    const pendingReceipt = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const pendingReceipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findFirst({
         where: {
           customerId: customer.id,
@@ -373,15 +385,20 @@ export class ReceiptsService {
         },
       });
 
-      // 2. Reconcile PaymentRecord
+      // 2. Reconcile PaymentRecord (only if not already paid/settled, e.g. plot_one_time documentation receipt)
       if (receipt.paymentRecordId) {
-        await tx.paymentRecord.update({
+        const currentPr = await tx.paymentRecord.findUnique({
           where: { id: receipt.paymentRecordId },
-          data: {
-            status: 'paid',
-            paidAmount: receipt.amount,
-          },
         });
+        if (currentPr && currentPr.status !== 'paid') {
+          await tx.paymentRecord.update({
+            where: { id: receipt.paymentRecordId },
+            data: {
+              status: 'paid',
+              paidAmount: receipt.amount,
+            },
+          });
+        }
       }
 
       // 3. Create Audit Log
