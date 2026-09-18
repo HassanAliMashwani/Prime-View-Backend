@@ -247,14 +247,29 @@ export class ReceiptsService {
       });
     });
 
-    const enriched = receipts.map((r) => ({
-      ...r,
-      customerName: r.customer?.fullName,
-      membershipNo: r.customer?.membershipNo,
-      customerPhone: r.customer?.phone,
-      customerCnic: r.customer?.cnic,
-      customerStrikeCount: r.customer?.strikeCount || 0,
-      customerStrikeHistory: r.customer?.strikes || [],
+    const enriched = await Promise.all(receipts.map(async (r) => {
+      const booking = await this.prisma.booking.findUnique({
+        where: { id: r.bookingId },
+        include: { plot: true }
+      });
+      const paymentRecord = r.paymentRecordId ? await this.prisma.paymentRecord.findUnique({
+        where: { id: r.paymentRecordId }
+      }) : null;
+
+      return {
+        ...r,
+        customerName: r.customer?.fullName,
+        membershipNo: r.customer?.membershipNo,
+        customerPhone: r.customer?.phone,
+        customerCnic: r.customer?.cnic,
+        customerStrikeCount: r.customer?.strikeCount || 0,
+        customerStrikeHistory: r.customer?.strikes || [],
+        plotId: booking?.plot?.id,
+        plotNumber: booking?.plot?.plotNumber,
+        blockName: booking?.plot?.blockId,
+        paymentType: booking?.paymentType,
+        installmentNumber: paymentRecord?.installmentNumber,
+      };
     }));
 
     return { ok: true, receipts: enriched };
@@ -264,15 +279,35 @@ export class ReceiptsService {
    * 3. GET /receipts/me
    * Retrieve receipts submitted by the authenticated customer.
    */
-  async getCustomerReceipts(customerId: string) {
-    const receipts = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+  async getCustomerReceipts(session: any) {
+    const customerId = session.customerId || session.id;
+    const receipts = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findMany({
         where: { customerId },
         orderBy: { uploadedAt: 'desc' },
       });
     });
 
-    return { ok: true, receipts };
+    const enriched = await Promise.all(receipts.map(async (r) => {
+      const booking = await this.prisma.booking.findUnique({
+        where: { id: r.bookingId },
+        include: { plot: true }
+      });
+      const paymentRecord = r.paymentRecordId ? await this.prisma.paymentRecord.findUnique({
+        where: { id: r.paymentRecordId }
+      }) : null;
+
+      return {
+        ...r,
+        plotId: booking?.plot?.id,
+        plotNumber: booking?.plot?.plotNumber,
+        blockName: booking?.plot?.blockId,
+        paymentType: booking?.paymentType,
+        installmentNumber: paymentRecord?.installmentNumber,
+      };
+    }));
+
+    return { ok: true, receipts: enriched };
   }
 
   /**
