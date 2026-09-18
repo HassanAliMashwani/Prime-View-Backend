@@ -279,7 +279,10 @@ export class ReceiptsService {
    * 3. GET /receipts/me
    * Retrieve receipts submitted by the authenticated customer.
    */
-  async getCustomerReceipts(session: any) {
+  async getCustomerReceipts(sessionOrId: any) {
+    const session = typeof sessionOrId === 'object' && sessionOrId !== null
+      ? sessionOrId
+      : { role: 'customer', customerId: String(sessionOrId) };
     const customerId = session.customerId || session.id;
     const receipts = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findMany({

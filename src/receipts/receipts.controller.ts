@@ -43,8 +43,7 @@ export class ReceiptsController {
 
   @Get('me')
   async getCustomerReceipts(@CurrentSession() session: any) {
-    const customerId = session.customerId || session.id;
-    return this.receiptsService.getCustomerReceipts(customerId);
+    return this.receiptsService.getCustomerReceipts(session);
   }
 
   @Post(':id/verify')
