@@ -112,7 +112,7 @@ CREATE POLICY plot_status_history_select ON "PlotStatusHistory"
       EXISTS (
         SELECT 1 FROM "Plot" 
         WHERE id = "plotId" AND "blockId" IN (
-          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
         )
       )
     ) OR
@@ -129,7 +129,7 @@ CREATE POLICY plot_status_history_insert ON "PlotStatusHistory"
       EXISTS (
         SELECT 1 FROM "Plot" 
         WHERE id = "plotId" AND "blockId" IN (
-          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
         )
       )
     ) OR

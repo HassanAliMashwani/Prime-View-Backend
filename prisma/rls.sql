@@ -70,6 +70,34 @@ CREATE POLICY plot_insert_scope ON "Plot"
     )
   );
 
+CREATE POLICY "Sub-admins can insert plot status history for assigned blocks"
+ON "PlotStatusHistory" FOR INSERT
+WITH CHECK (
+  current_setting('app.current_admin_id', true) IS NOT NULL AND
+  EXISTS (
+    SELECT 1 FROM "Plot"
+    WHERE id = "plotId"
+    AND "blockId" IN (
+      SELECT "blockId" FROM "BlockAssignment"
+      WHERE "adminId" = current_setting('app.current_admin_id', true)
+    )
+  )
+);
+
+CREATE POLICY "Sub-admins can view plot status history for assigned blocks"
+ON "PlotStatusHistory" FOR SELECT
+USING (
+  current_setting('app.current_admin_id', true) IS NOT NULL AND
+  EXISTS (
+    SELECT 1 FROM "Plot"
+    WHERE id = "plotId"
+    AND "blockId" IN (
+      SELECT "blockId" FROM "BlockAssignment"
+      WHERE "adminId" = current_setting('app.current_admin_id', true)
+    )
+  )
+);
+
 -- Reservation Policies
 DROP POLICY IF EXISTS reservation_select_scope ON "Reservation";
 CREATE POLICY reservation_select_scope ON "Reservation"
@@ -240,7 +268,7 @@ CREATE POLICY "plot_status_history_select" ON "PlotStatusHistory"
       EXISTS (
         SELECT 1 FROM "Plot" 
         WHERE id = "plotId" AND "blockId" IN (
-          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
         )
       )
     ) OR
@@ -256,7 +284,7 @@ CREATE POLICY "plot_status_history_insert" ON "PlotStatusHistory"
       EXISTS (
         SELECT 1 FROM "Plot" 
         WHERE id = "plotId" AND "blockId" IN (
-          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
         )
       )
     ) OR

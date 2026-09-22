@@ -36,7 +36,7 @@ export class ReceiptsService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({ where: { id: customerId } });
     });
 
@@ -217,7 +217,7 @@ export class ReceiptsService {
         plotNumber: booking.plot.plotNumber,
         blockName: booking.plot.blockId,
         paymentType: dto.paymentType,
-        installmentNumber: dto.installmentNumber,
+        installmentNumber: dto.paymentType === 'installment' && targetPaymentRecord ? targetPaymentRecord.installmentNumber : dto.installmentNumber,
       },
     };
   }
