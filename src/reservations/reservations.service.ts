@@ -18,8 +18,8 @@ export class ReservationsService {
     private plotsService: PlotsService,
   ) {}
 
-  private async getReservationMeta(id: string) {
-    const res = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+  private async getReservationMeta(id: string, session: any) {
+    const res = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.reservation.findUnique({
         where: { id },
         include: { plot: true },
@@ -34,7 +34,7 @@ export class ReservationsService {
   }
 
   async confirm(id: string, session: any) {
-    const reservation = await this.getReservationMeta(id);
+    const reservation = await this.getReservationMeta(id, session);
 
     if (reservation.status !== ReservationStatus.active) {
       throw new BadRequestException({
@@ -64,7 +64,7 @@ export class ReservationsService {
   }
 
   async release(id: string, session: any) {
-    const reservation = await this.getReservationMeta(id);
+    const reservation = await this.getReservationMeta(id, session);
 
     const isOwner = reservation.reservedByAdminId === session.adminId;
     const isSuperAdmin = session.role === 'super_admin';
@@ -147,7 +147,7 @@ export class ReservationsService {
   }
 
   async updateNote(id: string, note: string, session: any) {
-    const reservation = await this.getReservationMeta(id);
+    const reservation = await this.getReservationMeta(id, session);
 
     if (session.role !== 'super_admin' && !session.assignedBlocks?.includes(reservation.plot.blockId)) {
       throw new ForbiddenException({

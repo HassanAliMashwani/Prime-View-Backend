@@ -109,10 +109,10 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
+      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
         throw new ConflictException({
-          error: 'PLOT_ALREADY_BOOKED',
-          message: 'Plot is already booked or allotted and cannot be locked',
+          error: 'PLOT_NOT_AVAILABLE',
+          message: `Plot is ${plot.status} and cannot be locked`,
         });
       }
 
@@ -244,8 +244,9 @@ export class PlotsService {
 
     const now = new Date();
     const lockExpiryWindowMs = 10 * 60 * 1000;
-    const validDays = dto.validDays || 7;
-    const validUntil = new Date(now.getTime() + validDays * 24 * 60 * 60 * 1000);
+    // P2-02: Default hold duration is 24 hours (1 day)
+    const validHours = dto.validHours ?? (dto.validDays ? dto.validDays * 24 : 24);
+    const validUntil = new Date(now.getTime() + validHours * 60 * 60 * 1000);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Concurrency Gate: Acquire row lock on plot
@@ -269,11 +270,11 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
+      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
         throw new ConflictException({
-          error: 'PLOT_ALREADY_BOOKED',
-          reason: 'PLOT_ALREADY_BOOKED',
-          message: 'Plot is already booked or allotted and cannot be reserved',
+          error: 'PLOT_NOT_AVAILABLE',
+          reason: 'PLOT_NOT_AVAILABLE',
+          message: `Plot is ${plot.status} and cannot be reserved`,
         });
       }
 
@@ -292,7 +293,7 @@ export class PlotsService {
       const updateResult = await tx.plot.updateMany({
         where: {
           id: plotId,
-          status: { notIn: [PlotStatus.booked, PlotStatus.allotted] },
+          status: { notIn: [PlotStatus.booked, PlotStatus.allotted, PlotStatus.disputed] },
         },
         data: {
           status: PlotStatus.reserved,

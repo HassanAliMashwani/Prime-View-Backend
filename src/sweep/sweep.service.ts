@@ -76,8 +76,11 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
     let clearedContentLocks = 0;
     let expiredReservations = 0;
 
+    // P2-02: Documented SYSTEM session used exclusively by daemon worker (no super_admin bypass)
+    const SYSTEM_SWEEP_SESSION = { role: 'system_sweep', adminId: 'sweep' };
+
     try {
-      await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+      await this.prisma.withScopedSession(SYSTEM_SWEEP_SESSION, async (tx) => {
         // ── 1. Expire Plot Locks (> 10 minutes) ──
         const expiredPlots = await tx.plot.findMany({
           where: {
@@ -242,7 +245,13 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
             where: { id: res.plotId },
           });
 
-          if (currentPlot && currentPlot.status !== 'booked' && otherActiveRes === 0 && isBooked === 0) {
+          // P2-02: Ensure unbooked plots restore to available, but NEVER revert allotted or disputed plots
+          if (
+            currentPlot &&
+            !['booked', 'allotted', 'disputed'].includes(currentPlot.status) &&
+            otherActiveRes === 0 &&
+            isBooked === 0
+          ) {
             await tx.plot.update({
               where: { id: res.plotId },
               data: { status: 'available' },

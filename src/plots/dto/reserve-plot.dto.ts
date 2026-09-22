@@ -22,6 +22,11 @@ export class ReservePlotDto {
   @IsOptional()
   validDays?: number;
 
+  @IsNumber()
+  @IsOptional()
+  @Min(1)
+  validHours?: number;
+
   @IsString()
   @IsOptional()
   note?: string;
