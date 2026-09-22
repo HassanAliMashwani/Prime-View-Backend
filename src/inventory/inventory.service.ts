@@ -7,12 +7,12 @@ export class InventoryService {
 
   async getStats(session: ScopedSession, from?: string, to?: string, blockId?: string) {
     return this.prisma.withScopedSession(session, async (tx) => {
-      const adminUser = await tx.adminUser.findUnique({ where: { id: session.adminId } });
+      const adminUser = await tx.adminUser.findUnique({ where: { id: session.adminId }, include: { assignments: true } });
       
       let blocksQuery: any = blockId ? { id: blockId } : {};
       if (session.role === 'sub_admin') {
         if (!adminUser) throw new BadRequestException(`Sub-admin user not found in DB (id=${session.adminId})`);
-        const assignedBlocks = (adminUser.permissions as any)?.assignedBlocks || [];
+        const assignedBlocks = adminUser.assignments.map(a => a.blockId);
         if (blockId && !assignedBlocks.includes(blockId)) return [];
         blocksQuery = { id: blockId ? blockId : { in: assignedBlocks } };
       }
