@@ -58,6 +58,7 @@ enum FeeType {
 
 enum PaymentStatus {
   pending
+  partially_paid
   paid
   overdue
 }

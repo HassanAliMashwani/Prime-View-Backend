@@ -36,7 +36,7 @@ async function main() {
           EXISTS (
             SELECT 1 FROM "Plot" 
             WHERE id = "plotId" AND "blockId" IN (
-              SELECT get_assigned_blocks(current_setting('app.current_user_id', true))
+              SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
             )
           )
         ) OR

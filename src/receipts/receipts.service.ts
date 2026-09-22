@@ -71,7 +71,7 @@ export class ReceiptsService {
     }
 
     // Verify plot ownership
-    const booking = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const booking = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.booking.findFirst({
         where: {
           customerId: customer.id,
@@ -94,17 +94,22 @@ export class ReceiptsService {
 
     // Identify target payment record
     let targetPaymentRecord: any = null;
-    if (dto.paymentType === 'installment' && dto.installmentNumber !== undefined) {
-      targetPaymentRecord = booking.payments.find(
-        (p) =>
-          p.feeType === 'plot_installment' &&
-          p.installmentNumber === Number(dto.installmentNumber),
-      );
+    if (dto.paymentType === 'installment') {
+      const dueStatuses = ['pending', 'overdue', 'partially_paid'];
+      targetPaymentRecord = booking.payments
+        .filter((p) => p.feeType === 'plot_installment' && dueStatuses.includes(p.status))
+        .sort((a, b) => {
+          if (a.dueDate && b.dueDate) {
+            const cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+            if (cmp !== 0) return cmp;
+          }
+          return (a.installmentNumber || 0) - (b.installmentNumber || 0);
+        })[0];
 
-      if (targetPaymentRecord && targetPaymentRecord.status === 'paid') {
-        throw new ConflictException({
-          error: 'ALREADY_PAID',
-          message: `Installment #${dto.installmentNumber} has already been settled and marked paid in the society ledger.`,
+      if (!targetPaymentRecord) {
+        throw new BadRequestException({
+          error: 'NO_OUTSTANDING_INSTALLMENTS',
+          message: 'No outstanding installments found for this plot.',
         });
       }
     } else if (dto.paymentType === 'one_time') {
@@ -139,7 +144,7 @@ export class ReceiptsService {
           customerId: customer.id,
           bookingId: booking.id,
           status: 'pending',
-          ...(targetPaymentRecord ? { paymentRecordId: targetPaymentRecord.id } : {}),
+          ...(dto.paymentType === 'one_time' && targetPaymentRecord ? { paymentRecordId: targetPaymentRecord.id } : {}),
         },
       });
     });
@@ -149,7 +154,7 @@ export class ReceiptsService {
         error: 'RECEIPT_ALREADY_PENDING',
         message:
           dto.paymentType === 'installment'
-            ? `A receipt for Installment #${dto.installmentNumber} has already been submitted and is currently pending verification.`
+            ? 'A receipt for this plot is already pending verification.'
             : 'A receipt for this plot purchase is already pending verification by the society desk.',
       });
     }
