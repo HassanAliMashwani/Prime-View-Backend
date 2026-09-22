@@ -235,21 +235,32 @@ CREATE POLICY "plot_status_history_select" ON "PlotStatusHistory"
   FOR SELECT TO app_user
   USING (
     current_setting('app.current_role', true) = 'super_admin' OR
-    current_setting('app.current_role', true) = 'sub_admin'
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "Plot" 
+        WHERE id = "plotId" AND "blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+        )
+      )
+    ) OR
+    current_setting('app.current_session_id', true) = 'system_sweep'
   );
 
 CREATE POLICY "plot_status_history_insert" ON "PlotStatusHistory"
   FOR INSERT TO app_user
   WITH CHECK (
     current_setting('app.current_role', true) = 'super_admin' OR
-    current_setting('app.current_role', true) = 'sub_admin'
-  );
-
--- System Sweep Policy for PlotStatusHistory
-CREATE POLICY "system_sweep_select_plotstatushistory" ON "PlotStatusHistory"
-  FOR SELECT TO system_sweep
-  USING (
-    current_setting('app.source', true) = 'sweep'
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "Plot" 
+        WHERE id = "plotId" AND "blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+        )
+      )
+    ) OR
+    current_setting('app.current_session_id', true) = 'system_sweep'
   );
 
 -- Audit Entry

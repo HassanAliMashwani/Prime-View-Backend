@@ -106,14 +106,34 @@ DROP POLICY IF EXISTS plot_status_history_select ON "PlotStatusHistory";
 CREATE POLICY plot_status_history_select ON "PlotStatusHistory"
   FOR SELECT
   USING (
-    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin')
+    current_setting('app.current_role', true) = 'super_admin' OR
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "Plot" 
+        WHERE id = "plotId" AND "blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+        )
+      )
+    ) OR
+    current_setting('app.current_session_id', true) = 'system_sweep'
   );
 
 DROP POLICY IF EXISTS plot_status_history_insert ON "PlotStatusHistory";
 CREATE POLICY plot_status_history_insert ON "PlotStatusHistory"
   FOR INSERT
   WITH CHECK (
-    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin', 'system_sweep')
+    current_setting('app.current_role', true) = 'super_admin' OR
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "Plot" 
+        WHERE id = "plotId" AND "blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_user_id', true)
+        )
+      )
+    ) OR
+    current_setting('app.current_session_id', true) = 'system_sweep'
   );
 
 DROP POLICY IF EXISTS audit_entry_select_scope ON "AuditEntry";
