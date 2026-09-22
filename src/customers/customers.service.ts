@@ -1247,7 +1247,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({ where: { id } });
     });
 

@@ -1,5 +1,25 @@
 # Changelog — Prime View Backend
 
+## [P2-03] - 2026-09-23
+
+### Added
+- **Derived Disputed Display Status (Visual-only, zero DB mutations):**
+  - Created `src/plots/display-status.ts` with `resolveDisplayStatus(plot, ownerAccountStatus)` and `attachDisplayStatus(plot)` helpers.
+  - Precedence: `stored disputed (plot.status === 'disputed')` → `displayStatus: 'disputed'` (preserves `plot.disputeReason`). Else if `owner.accountStatus === 'suspended'` → `displayStatus: 'disputed', displayStatusReason: 'Disputed — customer account suspended'`. Else `displayStatus = plot.status`.
+  - `PlotsService.findAll` and `findOne` now `include: { currentOwner: { select: { id, accountStatus } } }` and map through `attachDisplayStatus`. No N+1 queries.
+  - `CustomersService.toggleSuspension`: replaced `{ role: 'super_admin' }` bypass with caller `session` in `withScopedSession`.
+- **Section 0 (P2-02 Leftovers) — Completed:**
+  - 0.1 RLS Fold: `system_sweep` policies folded idempotently into `prisma/rls.sql` and `prisma/rls_updates.sql`. `rls_system_sweep.sql` is a pointer-only.
+  - 0.2 JWT/Source Guard: `PrismaService.withScopedSession` rejects any JWT presenting `role: 'system_sweep'` without `source: 'sweep'`.
+  - 0.3 HTTP Re-Proof: `allotted` and `disputed` plots return `409 PLOT_NOT_AVAILABLE` on reserve and lock endpoints.
+
+### Unchanged (by design)
+- `Plot.status` column is NEVER written by suspend/reinstate.
+- SweepService, inventory overview, lock/reserve guards all use stored `plot.status`.
+- OI-12 (plot-a-01 dual booking) and OI-13 (5 booked elite plots, no owner) remain OPEN and untouched.
+
+---
+
 ## [P2-02] - 2026-09-22
 
 ### Changed

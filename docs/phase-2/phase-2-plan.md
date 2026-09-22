@@ -203,7 +203,13 @@ graph TD
 - **P2-00:** Discovery & System Verification (Complete with this amended document).
 - **P2-01:** Map colour tokens, SVG hatch pattern, legend note, pill, `PlotStatus` migration (`allotted`, `disputed`), one-time booking status rule (11 plots migrated).
 - **P2-02:** Reservation hold default = 24h in `plots.service.ts` and frontend dialog.
-- **P2-03:** Derived `Disputed` status for plots owned by suspended members on map view.
+- **P2-03 (COMPLETE):** Derived `Disputed` display status for plots owned by suspended customers.
+  - Backend: `src/plots/display-status.ts` — `resolveDisplayStatus` / `attachDisplayStatus` helpers. `PlotsService.findAll` and `findOne` include `currentOwner.accountStatus` and apply `attachDisplayStatus`. `CustomersService.toggleSuspension` now uses caller `session` (not hardcoded `super_admin`).
+  - Frontend: `Plot` interface extended with `displayStatus?` and `displayStatusReason?`. `InteractiveBlockMap`, `filteredPlots`, card grid, drawer, and tooltip all read `plot.displayStatus || plot.status` (visual layer). Drawer shows `(stored: <status>)` when derived status differs.
+  - **Display Status Precedence (D4):** `stored disputed > suspended-owner derived disputed > stored status`. Visual layer only: no writes to `Plot.status`.
+  - **Exact dispute reason string (suspended-owner):** `"Disputed — customer account suspended"`.
+  - **Stored dispute (plot-a-01):** Preserves `plot.disputeReason`; does NOT show suspended-customer text.
+  - **DB proof:** Suspend cust-1 → `plot-a-02.displayStatus = 'disputed'`, `plot-a-02.status = 'allotted'` (unchanged). Reinstate cust-1 → `displayStatus = 'allotted'`, `displayStatusReason = null`.
 - **P2-04:** Inventory Overview: 4 columns (`Booked`, `Allotted`, `Reserved`, `Available`), `plot_status_history` table + backfill, server-side date range filter, print layout.
 - **P2-05:** Server-computed next due installment lock, tamper protection, `partially_paid` status migration.
 - **P2-06:** Balloon payment engine in pure integer PKR, `payment_allocations` table (`ON DELETE RESTRICT`), customer preview, admin verification with concurrency row-locks.

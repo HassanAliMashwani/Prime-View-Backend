@@ -76,8 +76,8 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
     let clearedContentLocks = 0;
     let expiredReservations = 0;
 
-    // P2-02: Documented SYSTEM session used exclusively by daemon worker (no super_admin bypass)
-    const SYSTEM_SWEEP_SESSION = { role: 'system_sweep', adminId: 'sweep' };
+    // P2-02 & P2-03: Documented SYSTEM session used exclusively by daemon worker (source: 'sweep' required)
+    const SYSTEM_SWEEP_SESSION = { role: 'system_sweep', adminId: 'sweep', source: 'sweep' };
 
     try {
       await this.prisma.withScopedSession(SYSTEM_SWEEP_SESSION, async (tx) => {

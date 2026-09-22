@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleInit, OnModuleDestroy, ForbiddenException } from '@nestjs/common';
 import { PrismaClient, Prisma } from '@prisma/client';
 
 export interface ScopedSession {
@@ -6,6 +6,7 @@ export interface ScopedSession {
   adminId?: string;
   customerId?: string;
   permissions?: Record<string, boolean>;
+  source?: string;
 }
 
 @Injectable()
@@ -22,6 +23,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     session: ScopedSession,
     callback: (tx: Prisma.TransactionClient) => Promise<T>
   ): Promise<T> {
+    // P2-03: Security Guard — reject role === 'system_sweep' unless source === 'sweep'
+    if (session.role === 'system_sweep' && session.source !== 'sweep') {
+      throw new ForbiddenException({
+        error: 'UNAUTHORIZED_SYSTEM_ROLE',
+        message: 'system_sweep role can only be invoked by internal daemon worker',
+      });
+    }
+
     return this.$transaction(
       async (tx) => {
         await tx.$executeRaw`

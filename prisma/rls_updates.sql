@@ -3,7 +3,7 @@ DROP POLICY IF EXISTS plot_block_scope ON "Plot";
 CREATE POLICY plot_block_scope ON "Plot"
   FOR SELECT
   USING (
-    current_setting('app.current_role', true) = 'super_admin'
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
     OR "currentOwnerId" = current_setting('app.current_customer_id', true)
     OR "blockId" IN (
       SELECT "blockId" FROM "BlockAssignment"
@@ -48,7 +48,7 @@ DROP POLICY IF EXISTS plot_update_scope ON "Plot";
 CREATE POLICY plot_update_scope ON "Plot"
   FOR UPDATE
   USING (
-    current_setting('app.current_role', true) = 'super_admin'
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
     OR "blockId" IN (
       SELECT "blockId" FROM "BlockAssignment"
       WHERE "adminId" = current_setting('app.current_admin_id', true)
@@ -94,16 +94,18 @@ CREATE POLICY customer_insert_scope ON "Customer"
 
 -- 7. AuditEntry (Addendum 4 - Replace allow-all with explicit restriction)
 DROP POLICY IF EXISTS audit_entry_allow_all ON "AuditEntry";
+DROP POLICY IF EXISTS audit_entry_insert_scope ON "AuditEntry";
 CREATE POLICY audit_entry_insert_scope ON "AuditEntry"
   FOR INSERT
   WITH CHECK (
-    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin', 'customer')
+    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin', 'customer', 'system_sweep')
   );
 
+DROP POLICY IF EXISTS audit_entry_select_scope ON "AuditEntry";
 CREATE POLICY audit_entry_select_scope ON "AuditEntry"
   FOR SELECT
   USING (
-    current_setting('app.current_role', true) = 'super_admin'
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
     OR "actorId" = current_setting('app.current_admin_id', true)
     OR "actorId" = current_setting('app.current_customer_id', true)
     OR (
@@ -127,7 +129,7 @@ DROP POLICY IF EXISTS booking_block_scope ON "Booking";
 CREATE POLICY booking_block_scope ON "Booking"
   FOR ALL
   USING (
-    current_setting('app.current_role', true) = 'super_admin'
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
     OR "customerId" = current_setting('app.current_customer_id', true)
     OR "plotId" IN (
       SELECT id FROM "Plot" WHERE "blockId" IN (
@@ -154,5 +156,59 @@ CREATE POLICY payment_record_scope ON "PaymentRecord"
           WHERE "adminId" = current_setting('app.current_admin_id', true)
         )
       )
+    )
+  );
+
+-- 8. Reservation Policies with system_sweep
+DROP POLICY IF EXISTS reservation_select_scope ON "Reservation";
+CREATE POLICY reservation_select_scope ON "Reservation"
+  FOR SELECT
+  USING (
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
+    OR "plotId" IN (
+      SELECT id FROM "Plot" WHERE "blockId" IN (
+        SELECT "blockId" FROM "BlockAssignment"
+        WHERE "adminId" = current_setting('app.current_admin_id', true)
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS reservation_update_scope ON "Reservation";
+CREATE POLICY reservation_update_scope ON "Reservation"
+  FOR UPDATE
+  USING (
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
+    OR "plotId" IN (
+      SELECT id FROM "Plot" WHERE "blockId" IN (
+        SELECT "blockId" FROM "BlockAssignment"
+        WHERE "adminId" = current_setting('app.current_admin_id', true)
+      )
+    )
+  );
+
+-- 9. ContentBlock Policies with system_sweep
+ALTER TABLE "ContentBlock" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "ContentBlock" FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS content_block_select_scope ON "ContentBlock";
+CREATE POLICY content_block_select_scope ON "ContentBlock"
+  FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS content_block_update_scope ON "ContentBlock";
+CREATE POLICY content_block_update_scope ON "ContentBlock"
+  FOR UPDATE
+  USING (
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
+    OR (
+      current_setting('app.current_role', true) = 'sub_admin'
+      AND (current_setting('app.current_permissions', true)::jsonb ? 'can_edit_content')
+    )
+  )
+  WITH CHECK (
+    current_setting('app.current_role', true) IN ('super_admin', 'system_sweep')
+    OR (
+      current_setting('app.current_role', true) = 'sub_admin'
+      AND (current_setting('app.current_permissions', true)::jsonb ? 'can_edit_content')
     )
   );

@@ -13,6 +13,8 @@ import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
 import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatus, PlotStatus } from '@prisma/client';
 
+import { attachDisplayStatus } from './display-status';
+
 @Injectable()
 export class PlotsService {
   private readonly logger = new Logger(PlotsService.name);
@@ -31,12 +33,20 @@ export class PlotsService {
     }
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      return tx.plot.findMany({
+      const plots = await tx.plot.findMany({
         where: whereClause,
         include: {
           reservations: true,
+          currentOwner: {
+            select: {
+              id: true,
+              accountStatus: true,
+            },
+          },
         },
       });
+
+      return plots.map(attachDisplayStatus);
     });
   }
 
@@ -64,12 +74,21 @@ export class PlotsService {
     await this.getPlotWithScopeCheck(id, session);
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      return tx.plot.findUnique({
+      const plot = await tx.plot.findUnique({
         where: { id },
         include: {
           reservations: true,
+          currentOwner: {
+            select: {
+              id: true,
+              accountStatus: true,
+            },
+          },
         },
       });
+
+      if (!plot) return null;
+      return attachDisplayStatus(plot);
     });
   }
 

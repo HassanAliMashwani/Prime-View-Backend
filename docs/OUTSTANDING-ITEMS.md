@@ -20,3 +20,12 @@
 - **Current state:** Preserved as-is (read-only) per P2-02 requirements. No manual status mutations performed.
 - **What is needed to close:** Confirm whether these plots should be released to `available` or if legacy offline booking records need to be backfilled.
 - **Status:** OPEN.
+
+---
+
+### [P2-03 Note] OI-12 and OI-13 Verified Untouched
+- **P2-03 Verification (2026-09-23):**
+  - `plot-a-01`: `status = 'disputed'`, `currentOwnerId = 'cust-1789346204862-qzlx'`, 2 active bookings — all UNCHANGED.
+  - Elite OI-13 plots (`plot-el-34`, `plot-el-94`, `plot-el-128`, `plot-el-147`, `plot-el-254`): `status = 'booked'`, `currentOwnerId = null` — all UNCHANGED.
+  - P2-03 suspend/reinstate does NOT write to `Plot.status` or `currentOwnerId`.
+
