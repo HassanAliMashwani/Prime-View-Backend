@@ -41,7 +41,7 @@ export class PlotsService {
   }
 
   private async getPlotWithScopeCheck(plotId: string, session: any) {
-    const plotMeta = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const plotMeta = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.plot.findUnique({ where: { id: plotId } });
     });
 
@@ -109,10 +109,10 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked) {
+      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
         throw new ConflictException({
           error: 'PLOT_ALREADY_BOOKED',
-          message: 'Plot is already booked and cannot be locked',
+          message: 'Plot is already booked or allotted and cannot be locked',
         });
       }
 
@@ -269,11 +269,11 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked || plot.status === 'booked') {
+      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
         throw new ConflictException({
           error: 'PLOT_ALREADY_BOOKED',
           reason: 'PLOT_ALREADY_BOOKED',
-          message: 'Plot is already booked and cannot be reserved',
+          message: 'Plot is already booked or allotted and cannot be reserved',
         });
       }
 
@@ -292,7 +292,7 @@ export class PlotsService {
       const updateResult = await tx.plot.updateMany({
         where: {
           id: plotId,
-          status: { not: PlotStatus.booked },
+          status: { notIn: [PlotStatus.booked, PlotStatus.allotted] },
         },
         data: {
           status: PlotStatus.reserved,
@@ -420,10 +420,10 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked) {
+      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
         throw new ConflictException({
           error: 'ALREADY_BOOKED',
-          message: 'Plot is already booked',
+          message: 'Plot is already booked or allotted',
         });
       }
 
@@ -482,13 +482,16 @@ export class PlotsService {
       }
 
       // 3. Atomic Conditional Update on Plot
+      const pType: PaymentType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
+
       const updateResult = await tx.plot.updateMany({
         where: {
           id: plotId,
-          status: { not: PlotStatus.booked },
+          status: { notIn: [PlotStatus.booked, PlotStatus.allotted] },
         },
         data: {
-          status: PlotStatus.booked,
+          status: targetPlotStatus,
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
@@ -498,20 +501,19 @@ export class PlotsService {
       if (updateResult.count === 0) {
         throw new ConflictException({
           error: 'ALREADY_BOOKED',
-          message: 'Plot is already booked',
+          message: 'Plot is already booked or allotted',
         });
       }
 
       const updatedPlot = {
         ...plot,
-        status: PlotStatus.booked,
+        status: targetPlotStatus,
         currentOwnerId: customer.id,
         lockedBy: null,
         lockedAt: null,
       };
 
       // 4. Compute Installment Plan & Validation
-      const pType: PaymentType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
       const plotPriceNum = Number(plot.price);
 
       let installmentPlanData: any = null;
@@ -805,7 +807,7 @@ export class PlotsService {
       });
     }
 
-    const plot = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const plot = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.plot.findUnique({ where: { id: plotId } });
     });
 

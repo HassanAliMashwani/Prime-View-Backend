@@ -43,8 +43,8 @@ export class ReservationsService {
       });
     }
 
-    if (reservation.plot.status === PlotStatus.booked) {
-      throw new ConflictException({ error: 'ALREADY_BOOKED', message: 'Plot is already booked' });
+    if (reservation.plot.status === PlotStatus.booked || reservation.plot.status === PlotStatus.allotted) {
+      throw new ConflictException({ error: 'ALREADY_BOOKED', message: 'Plot is already booked or allotted' });
     }
 
     // Delegate to bookPlot with reservationId

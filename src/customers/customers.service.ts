@@ -34,7 +34,7 @@ export class CustomersService {
    * Helper: System lookup to verify plot registration and validate administrative block scope.
    */
   private async getPlotWithScopeCheck(plotId: string, session: any) {
-    const plot = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const plot = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.plot.findUnique({
         where: { id: plotId },
         include: { block: true },
@@ -72,7 +72,7 @@ export class CustomersService {
       });
     }
 
-    if (plot.status === PlotStatus.booked) {
+    if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
       throw new ConflictException({
         error: 'PLOT_ALREADY_BOOKED',
         message: 'This plot has already been committed to another owner.',
@@ -731,10 +731,11 @@ export class CustomersService {
       });
 
       // 3. Update Plot
+      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
       const updatedPlot = await tx.plot.update({
         where: { id: plot.id },
         data: {
-          status: PlotStatus.booked,
+          status: targetPlotStatus,
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
@@ -988,10 +989,11 @@ export class CustomersService {
       });
 
       // 2. Update Plot
+      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
       const updatedPlot = await tx.plot.update({
         where: { id: plot.id },
         data: {
-          status: PlotStatus.booked,
+          status: targetPlotStatus,
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
