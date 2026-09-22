@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { updatePlotStatus } from './update-plot-status';
 import { ReservePlotDto } from './dto/reserve-plot.dto';
 import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
@@ -309,25 +310,17 @@ export class PlotsService {
       }
 
       // 2. Conditional update on plot: guard against booked status
-      const updateResult = await tx.plot.updateMany({
-        where: {
-          id: plotId,
-          status: { notIn: [PlotStatus.booked, PlotStatus.allotted, PlotStatus.disputed] },
-        },
-        data: {
-          status: PlotStatus.reserved,
+      await updatePlotStatus(tx, {
+        plotId,
+        fromStatus: plot.status,
+        toStatus: PlotStatus.reserved,
+        changedBy: session.adminId || session.username,
+        source: 'reserve',
+        plotData: {
           lockedBy: null,
           lockedAt: null,
         },
       });
-
-      if (updateResult.count === 0) {
-        throw new ConflictException({
-          error: 'PLOT_ALREADY_BOOKED',
-          reason: 'PLOT_ALREADY_BOOKED',
-          message: 'Plot is already booked and cannot be reserved',
-        });
-      }
 
       const updatedPlot = {
         ...plot,
@@ -505,25 +498,18 @@ export class PlotsService {
       const pType: PaymentType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
       const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
 
-      const updateResult = await tx.plot.updateMany({
-        where: {
-          id: plotId,
-          status: { notIn: [PlotStatus.booked, PlotStatus.allotted] },
-        },
-        data: {
-          status: targetPlotStatus,
+      await updatePlotStatus(tx, {
+        plotId,
+        fromStatus: plot.status,
+        toStatus: targetPlotStatus,
+        changedBy: session.adminId || session.username,
+        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        plotData: {
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
         },
       });
-
-      if (updateResult.count === 0) {
-        throw new ConflictException({
-          error: 'ALREADY_BOOKED',
-          message: 'Plot is already booked or allotted',
-        });
-      }
 
       const updatedPlot = {
         ...plot,

@@ -14,6 +14,7 @@ import { SweepModule } from './sweep/sweep.module';
 import { StorageModule } from './storage/storage.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { SalesModule } from './sales/sales.module';
+import { InventoryModule } from './inventory/inventory.module';
 
 @Module({
   imports: [
@@ -34,9 +35,9 @@ import { SalesModule } from './sales/sales.module';
     SweepModule,
     StorageModule,
     SalesModule,
+    InventoryModule,
   ],
   controllers: [],
   providers: [PrismaService],
 })
 export class AppModule {}
-

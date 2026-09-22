@@ -22,6 +22,7 @@ import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
 import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
+import { updatePlotStatus } from '../plots/update-plot-status';
 
 @Injectable()
 export class CustomersService {
@@ -293,16 +294,30 @@ export class CustomersService {
         },
       });
 
-      // 3. Flip Plot to booked & clear locks
-      const updatedPlot = await tx.plot.update({
-        where: { id: plot.id },
-        data: {
-          status: PlotStatus.booked,
+      // 3. Flip Plot to booked/allotted & clear locks
+      const pType = (dto as any).paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
+
+      await updatePlotStatus(tx, {
+        plotId: plot.id,
+        fromStatus: plot.status,
+        toStatus: targetPlotStatus,
+        changedBy: session.adminId || session.username,
+        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        plotData: {
           currentOwnerId: newCustomer.id,
           lockedBy: null,
           lockedAt: null,
         },
       });
+
+      const updatedPlot = {
+        ...plot,
+        status: targetPlotStatus,
+        currentOwnerId: newCustomer.id,
+        lockedBy: null,
+        lockedAt: null,
+      };
 
       // 4. Supersede prior active reservations
       await tx.reservation.updateMany({
@@ -732,15 +747,27 @@ export class CustomersService {
 
       // 3. Update Plot
       const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
-      const updatedPlot = await tx.plot.update({
-        where: { id: plot.id },
-        data: {
-          status: targetPlotStatus,
+
+      await updatePlotStatus(tx, {
+        plotId: plot.id,
+        fromStatus: plot.status,
+        toStatus: targetPlotStatus,
+        changedBy: session.adminId || session.username,
+        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        plotData: {
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
         },
       });
+
+      const updatedPlot = {
+        ...plot,
+        status: targetPlotStatus,
+        currentOwnerId: customer.id,
+        lockedBy: null,
+        lockedAt: null,
+      };
 
       // 4. Supersede active reservations
       await tx.reservation.updateMany({
@@ -990,15 +1017,27 @@ export class CustomersService {
 
       // 2. Update Plot
       const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
-      const updatedPlot = await tx.plot.update({
-        where: { id: plot.id },
-        data: {
-          status: targetPlotStatus,
+
+      await updatePlotStatus(tx, {
+        plotId: plot.id,
+        fromStatus: plot.status,
+        toStatus: targetPlotStatus,
+        changedBy: session.adminId || session.username,
+        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        plotData: {
           currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
         },
       });
+
+      const updatedPlot = {
+        ...plot,
+        status: targetPlotStatus,
+        currentOwnerId: customer.id,
+        lockedBy: null,
+        lockedAt: null,
+      };
 
       // 3. Supersede active reservations
       await tx.reservation.updateMany({

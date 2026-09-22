@@ -230,7 +230,29 @@ CREATE POLICY payment_record_scope ON "PaymentRecord"
   );
 
 -- ─────────────────────────────────────────────────────────────────────────
--- Step 4: AuditEntry
+-- Step 4:-- Plot Status History
+CREATE POLICY "plot_status_history_select" ON "PlotStatusHistory"
+  FOR SELECT TO app_user
+  USING (
+    current_setting('app.current_role', true) = 'super_admin' OR
+    current_setting('app.current_role', true) = 'sub_admin'
+  );
+
+CREATE POLICY "plot_status_history_insert" ON "PlotStatusHistory"
+  FOR INSERT TO app_user
+  WITH CHECK (
+    current_setting('app.current_role', true) = 'super_admin' OR
+    current_setting('app.current_role', true) = 'sub_admin'
+  );
+
+-- System Sweep Policy for PlotStatusHistory
+CREATE POLICY "system_sweep_select_plotstatushistory" ON "PlotStatusHistory"
+  FOR SELECT TO system_sweep
+  USING (
+    current_setting('app.source', true) = 'sweep'
+  );
+
+-- Audit Entry
 -- ─────────────────────────────────────────────────────────────────────────
 REVOKE UPDATE, DELETE ON "AuditEntry" FROM app_user;
 

@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { updatePlotStatus } from '../plots/update-plot-status';
 
 export interface SweepStatus {
   isRunning: boolean;
@@ -252,9 +253,12 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
             otherActiveRes === 0 &&
             isBooked === 0
           ) {
-            await tx.plot.update({
-              where: { id: res.plotId },
-              data: { status: 'available' },
+            await updatePlotStatus(tx, {
+              plotId: res.plotId,
+              fromStatus: 'reserved',
+              toStatus: 'available',
+              changedBy: 'system_sweep',
+              source: 'expire',
             });
 
             await this.realtime.broadcast('plots', 'PLOT_STATUS_CHANGED', {

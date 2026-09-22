@@ -129,11 +129,27 @@ model Plot {
   lockedAt         DateTime?
   reservations     Reservation[]
   bookings         Booking[]
+  statusHistory    PlotStatusHistory[]
   version          Int           @default(0) // optimistic concurrency guard
 
   @@unique([blockId, plotNumber])
   @@index([blockId, status])
   @@index([status])
+}
+
+model PlotStatusHistory {
+  id         String      @id @default(uuid())
+  plotId     String
+  plot       Plot        @relation(fields: [plotId], references: [id], onDelete: Cascade)
+  fromStatus PlotStatus?  // nullable -> "initial" row has no prior status
+  toStatus   PlotStatus
+  changedAt  DateTime    @default(now())
+  changedBy  String      // adminId, 'system_sweep', 'backfill'
+  reason     String?
+  source     String      // 'book', 'reserve', 'expire', 'release', 'allot', 'backfill_booking', etc.
+
+  @@index([plotId, changedAt])
+  @@index([toStatus, changedAt])
 }
 
 // ── 2. Admin & Permissions ──

@@ -101,6 +101,21 @@ CREATE POLICY audit_entry_insert_scope ON "AuditEntry"
     current_setting('app.current_role', true) IN ('super_admin', 'sub_admin', 'customer', 'system_sweep')
   );
 
+-- 22. PlotStatusHistory FOR SELECT/INSERT (Admins only)
+DROP POLICY IF EXISTS plot_status_history_select ON "PlotStatusHistory";
+CREATE POLICY plot_status_history_select ON "PlotStatusHistory"
+  FOR SELECT
+  USING (
+    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin')
+  );
+
+DROP POLICY IF EXISTS plot_status_history_insert ON "PlotStatusHistory";
+CREATE POLICY plot_status_history_insert ON "PlotStatusHistory"
+  FOR INSERT
+  WITH CHECK (
+    current_setting('app.current_role', true) IN ('super_admin', 'sub_admin', 'system_sweep')
+  );
+
 DROP POLICY IF EXISTS audit_entry_select_scope ON "AuditEntry";
 CREATE POLICY audit_entry_select_scope ON "AuditEntry"
   FOR SELECT

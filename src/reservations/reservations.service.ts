@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { updatePlotStatus } from '../plots/update-plot-status';
 import { PlotsService } from '../plots/plots.service';
 import { ReservationStatus, PlotStatus } from '@prisma/client';
 
@@ -102,14 +103,18 @@ export class ReservationsService {
 
       let updatedPlot = null;
       if (otherActive === 0 && currentPlot?.status === PlotStatus.reserved) {
-        updatedPlot = await tx.plot.update({
-          where: { id: reservation.plotId },
-          data: {
-            status: PlotStatus.available,
+        await updatePlotStatus(tx, {
+          plotId: reservation.plotId,
+          fromStatus: 'reserved',
+          toStatus: 'available',
+          changedBy: session.adminId || session.username,
+          source: 'release',
+          plotData: {
             lockedBy: null,
             lockedAt: null,
-          },
+          }
         });
+        updatedPlot = await tx.plot.findUnique({ where: { id: reservation.plotId } });
       }
 
       // 3. Audit entry in exact same transaction
