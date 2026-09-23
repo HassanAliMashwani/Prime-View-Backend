@@ -259,6 +259,7 @@ CREATE POLICY payment_record_scope ON "PaymentRecord"
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- Step 4:-- Plot Status History
+DROP POLICY IF EXISTS "plot_status_history_select" ON "PlotStatusHistory";
 CREATE POLICY "plot_status_history_select" ON "PlotStatusHistory"
   FOR SELECT TO app_user
   USING (
@@ -272,9 +273,10 @@ CREATE POLICY "plot_status_history_select" ON "PlotStatusHistory"
         )
       )
     ) OR
-    current_setting('app.current_session_id', true) = 'system_sweep'
+    current_setting('app.current_role', true) = 'system_sweep'
   );
 
+DROP POLICY IF EXISTS "plot_status_history_insert" ON "PlotStatusHistory";
 CREATE POLICY "plot_status_history_insert" ON "PlotStatusHistory"
   FOR INSERT TO app_user
   WITH CHECK (
@@ -288,7 +290,7 @@ CREATE POLICY "plot_status_history_insert" ON "PlotStatusHistory"
         )
       )
     ) OR
-    current_setting('app.current_session_id', true) = 'system_sweep'
+    current_setting('app.current_role', true) = 'system_sweep'
   );
 
 -- Audit Entry

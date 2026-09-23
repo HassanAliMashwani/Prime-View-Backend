@@ -116,7 +116,7 @@ CREATE POLICY plot_status_history_select ON "PlotStatusHistory"
         )
       )
     ) OR
-    current_setting('app.current_session_id', true) = 'system_sweep'
+    current_setting('app.current_role', true) = 'system_sweep'
   );
 
 DROP POLICY IF EXISTS plot_status_history_insert ON "PlotStatusHistory";
@@ -133,7 +133,7 @@ CREATE POLICY plot_status_history_insert ON "PlotStatusHistory"
         )
       )
     ) OR
-    current_setting('app.current_session_id', true) = 'system_sweep'
+    current_setting('app.current_role', true) = 'system_sweep'
   );
 
 DROP POLICY IF EXISTS audit_entry_select_scope ON "AuditEntry";
