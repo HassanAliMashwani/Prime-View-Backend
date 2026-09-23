@@ -55,7 +55,7 @@ export class ReservationsService {
         customer: {
           fullName: reservation.customerName,
           phone: reservation.customerPhone,
-          email: reservation.customerEmail || `${reservation.customerPhone}@primeview.pk`,
+          email: reservation.customerEmail || `${reservation.customerPhone}@primeview.org`,
         },
         paymentType: 'one_time',
         reservationId: reservation.id,

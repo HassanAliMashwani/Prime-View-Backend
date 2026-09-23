@@ -734,23 +734,44 @@ export class ReceiptsService {
       return { exists: false, status: 'not_found' };
     }
 
-    // Mask customer name (e.g. "Usman K.")
-    let maskedName = 'Unknown';
-    if (receipt.customer?.fullName) {
-      const parts = receipt.customer.fullName.trim().split(/\s+/);
-      if (parts.length > 1) {
-        maskedName = `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
-      } else {
-        maskedName = `${parts[0]}`;
+    // Determine if one_time or installment
+    const booking = receipt.bookingId
+      ? await this.prisma.booking.findUnique({
+          where: { id: receipt.bookingId },
+          select: { paymentType: true },
+        })
+      : null;
+
+    let installmentNumber: number | null = null;
+    let isOneTime = booking?.paymentType === 'one_time';
+
+    if (receipt.paymentRecordId) {
+      const pr = await this.prisma.paymentRecord.findUnique({
+        where: { id: receipt.paymentRecordId },
+        select: { feeType: true, installmentNumber: true },
+      });
+      if (pr) {
+        if (pr.feeType === 'plot_one_time') isOneTime = true;
+        if (pr.installmentNumber !== null && pr.installmentNumber !== undefined) {
+          installmentNumber = pr.installmentNumber;
+        }
       }
     }
 
+    const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
+    const paymentDetails = isOneTime
+      ? 'Payment: full upfront / one-time'
+      : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
+
     return {
       exists: true,
-      status: receipt.status,
+      slipNumber: receipt.slipNumber,
+      memberDisplayName,
+      installmentNumber: isOneTime ? null : installmentNumber,
+      paymentDetails,
       amount: receipt.amount,
       paymentDate: receipt.paymentDate,
-      customerContext: maskedName,
+      status: receipt.status,
     };
   }
 }

@@ -290,11 +290,40 @@ export class PlotsService {
         });
       }
 
-      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
+      if (plot.status !== PlotStatus.available) {
         throw new ConflictException({
           error: 'PLOT_NOT_AVAILABLE',
           reason: 'PLOT_NOT_AVAILABLE',
           message: `Plot is ${plot.status} and cannot be reserved`,
+        });
+      }
+
+      // Enforce one person: check if any active reservation exists
+      const existingRes = await tx.reservation.findFirst({
+        where: {
+          plotId: plot.id,
+          status: ReservationStatus.active,
+          validUntil: { gt: now },
+        },
+      });
+      if (existingRes) {
+        throw new ConflictException({
+          error: 'ALREADY_RESERVED',
+          message: 'Plot already has an active reservation',
+        });
+      }
+
+      // Check if any live non-void booking exists
+      const existingBooking = await tx.booking.findFirst({
+        where: {
+          plotId: plot.id,
+          status: { not: 'void' },
+        },
+      });
+      if (existingBooking) {
+        throw new ConflictException({
+          error: 'ALREADY_BOOKED',
+          message: 'Plot already has a live booking',
         });
       }
 
@@ -491,6 +520,49 @@ export class PlotsService {
         throw new BadRequestException({
           error: 'CUSTOMER_REQUIRED',
           message: 'Either customerId or customer details must be provided',
+        });
+      }
+
+      // Enforce One Person: Check for live non-void booking
+      const existingBooking = await tx.booking.findFirst({
+        where: { plotId: plot.id, status: { not: 'void' } },
+      });
+      if (existingBooking || plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted) {
+        throw new ConflictException({
+          error: 'ALREADY_BOOKED',
+          message: 'Plot already has an active booking',
+        });
+      }
+
+      // Check for live reservation
+      const liveRes = await tx.reservation.findFirst({
+        where: {
+          plotId: plot.id,
+          status: ReservationStatus.active,
+          validUntil: { gt: now },
+        },
+      });
+
+      if (liveRes) {
+        // Enforce one person: check if this reservation belongs to the same person
+        const isSamePerson =
+          (liveRes.customerId && liveRes.customerId === customer.id) ||
+          (dto.reservationId && dto.reservationId === liveRes.id) ||
+          (liveRes.customerPhone && customer.phone && liveRes.customerPhone.trim() === customer.phone.trim()) ||
+          (liveRes.customerEmail && customer.email && liveRes.customerEmail.toLowerCase().trim() === customer.email.toLowerCase().trim());
+
+        if (!isSamePerson) {
+          throw new ConflictException({
+            error: 'RESERVED_BY_ANOTHER',
+            message: 'Plot is currently reserved by another customer',
+          });
+        }
+      }
+
+      if (plot.status === PlotStatus.disputed) {
+        throw new ConflictException({
+          error: 'PLOT_DISPUTED',
+          message: 'Plot is currently disputed and cannot be booked',
         });
       }
 
@@ -698,50 +770,17 @@ export class PlotsService {
 
       await tx.societyDocument.createMany({ data: societyDocsToCreate });
 
-      // 9. Resolve Reservations on this plot (only queried if plot was reserved or reservationId provided)
-      if (dto.reservationId || plot.status === PlotStatus.reserved) {
-        const activeReservations = await tx.reservation.findMany({
-          where: {
-            plotId: plot.id,
-            status: ReservationStatus.active,
+      // 9. Confirm active reservation if converting
+      if (liveRes) {
+        await tx.reservation.update({
+          where: { id: liveRes.id },
+          data: {
+            status: ReservationStatus.confirmed,
+            confirmedAt: now,
+            confirmedByBookingId: bookingId,
+            resolutionNote: `Confirmed into booking ${bookingId}`,
           },
         });
-
-        for (const res of activeReservations) {
-          if (dto.reservationId && res.id === dto.reservationId) {
-            await tx.reservation.update({
-              where: { id: res.id },
-              data: {
-                status: ReservationStatus.confirmed,
-                confirmedAt: now,
-                confirmedByBookingId: bookingId,
-                resolutionNote: `Confirmed into booking ${bookingId}`,
-              },
-            });
-          } else {
-            await tx.reservation.update({
-              where: { id: res.id },
-              data: {
-                status: ReservationStatus.superseded,
-                supersededAt: now,
-                supersededByBookingId: bookingId,
-                resolutionNote: `Superseded by direct purchase commitment ${bookingId}`,
-              },
-            });
-
-            await tx.auditEntry.create({
-              data: {
-                actorId: session.adminId || session.username,
-                actorName: session.fullName || session.username,
-                actorRole: session.role,
-                action: 'RESERVATION_SUPERSEDED',
-                entityType: 'reservation',
-                entityId: res.id,
-                details: `Reservation ${res.id} for ${res.customerName} on plot ${plot.plotNumber} superseded by booking ${bookingId}`,
-              },
-            });
-          }
-        }
       }
 
       // 10. Audit entry for PLOT_BOOKED inside same transaction

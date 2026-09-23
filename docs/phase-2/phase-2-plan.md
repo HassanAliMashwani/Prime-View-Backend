@@ -159,7 +159,7 @@ Total occurrences: **29 calls across 7 files**.
     src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(
       typeof window !== 'undefined'
         ? `${window.location.origin}/verify/${slip.slipNumber}`
-        : `https://primeview.pk/verify/${slip.slipNumber}`
+        : `/verify/${slip.slipNumber}`
     )}`}
     alt={`QR Code for ${slip.slipNumber}`}
     className="w-16 h-16 object-contain"
