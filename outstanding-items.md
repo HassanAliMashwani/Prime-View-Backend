@@ -1,1 +1,1 @@
-Moved to docs/system design/OUTSTANDING_ITEMS.md
+Moved to docs/system-design/OUTSTANDING_ITEMS.md
