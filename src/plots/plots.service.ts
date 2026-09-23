@@ -12,7 +12,8 @@ import { updatePlotStatus } from './update-plot-status';
 import { ReservePlotDto } from './dto/reserve-plot.dto';
 import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
-import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatus, PlotStatus } from '@prisma/client';
+import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
+import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatus, PlotStatus, Prisma } from '@prisma/client';
 
 import { attachDisplayStatus } from './display-status';
 
@@ -918,5 +919,88 @@ export class PlotsService {
         ? `Plot ${plot.plotNumber} flagged for Master Plan Adjustment.`
         : `Plot ${plot.plotNumber} adjustment hold released.`,
     };
+  }
+
+  /**
+   * PATCH /plots/:id/price
+   * Super Admin updates plot price.
+   * Rejects with 409 Conflict if paid payment records exist for this plot in the ledger.
+   * PaymentRecord.amount is NEVER touched.
+   */
+  async updatePlotPrice(plotId: string, dto: UpdatePlotPriceDto, session: any) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Plot pricing adjustments are strictly restricted to Super Administrators.',
+      });
+    }
+
+    if (!dto.price || dto.price <= 0) {
+      throw new BadRequestException({
+        error: 'INVALID_PRICE',
+        message: 'Price must be a positive number.',
+      });
+    }
+
+    return this.prisma.withScopedSession(session, async (tx) => {
+      const plot = await tx.plot.findUnique({
+        where: { id: plotId },
+        include: {
+          bookings: {
+            include: {
+              payments: true,
+            },
+          },
+        },
+      });
+
+      if (!plot) {
+        throw new NotFoundException({
+          error: 'PLOT_NOT_FOUND',
+          message: 'Plot not found.',
+        });
+      }
+
+      // Check if plot has paid payments that would require rewriting the ledger
+      const hasPaidPayments = plot.bookings.some((b) =>
+        b.payments.some((p) => p.status === 'paid' && Number(p.paidAmount) > 0)
+      );
+
+      if (hasPaidPayments) {
+        throw new ConflictException({
+          error: 'CANNOT_MODIFY_PRICE_WITH_PAID_RECORDS',
+          message: 'Cannot modify plot price when paid payment records already exist in ledger.',
+        });
+      }
+
+      const oldPrice = Number(plot.price);
+      const newPrice = Number(dto.price);
+
+      const updatedPlot = await tx.plot.update({
+        where: { id: plotId },
+        data: {
+          price: new Prisma.Decimal(newPrice),
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'PLOT_PRICE_UPDATED',
+          entityType: 'plot',
+          entityId: plotId,
+          details: `Updated price for plot ${plot.plotNumber} from PKR ${oldPrice.toLocaleString()} to PKR ${newPrice.toLocaleString()}`,
+          oldValue: { price: oldPrice },
+          newValue: { price: newPrice },
+        },
+      });
+
+      return {
+        ok: true,
+        plot: updatedPlot,
+      };
+    });
   }
 }

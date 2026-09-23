@@ -2,10 +2,13 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Body,
   UseGuards,
+  HttpCode,
+  HttpStatus,
 } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -18,6 +21,8 @@ import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
 import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
+import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
+import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
 
 @Controller('customers')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -144,5 +149,25 @@ export class CustomersController {
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentSession() session: any) {
     return this.customersService.findOne(id, session);
+  }
+
+  @Patch(':id/profile')
+  @HttpCode(HttpStatus.OK)
+  async updateProfile(
+    @Param('id') id: string,
+    @Body() dto: UpdateCustomerProfileDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.updateProfile(id, dto, session);
+  }
+
+  @Post(':id/change-password')
+  @HttpCode(HttpStatus.OK)
+  async changePassword(
+    @Param('id') id: string,
+    @Body() dto: ChangeCustomerPasswordDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.changePassword(id, dto, session);
   }
 }

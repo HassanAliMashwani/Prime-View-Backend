@@ -15,6 +15,7 @@ import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
 import { CurrentSession } from '../common/decorators/current-session.decorator';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
+import { ResetAdminPasswordDto } from './dto/reset-admin-password.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 
 @Controller('admin')
@@ -54,5 +55,15 @@ export class AdminController {
     @CurrentSession() session: any,
   ) {
     return this.adminService.updateSubAdmin(id, dto, session);
+  }
+
+  @Post('sub-admins/:id/reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetAdminPassword(
+    @Param('id') id: string,
+    @Body() dto: ResetAdminPasswordDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.adminService.resetAdminPassword(id, dto, session);
   }
 }

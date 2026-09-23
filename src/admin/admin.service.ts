@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
+import { ResetAdminPasswordDto } from './dto/reset-admin-password.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 import * as bcrypt from 'bcrypt';
 
@@ -319,5 +320,68 @@ export class AdminService {
         assignedBlocks: result.assignedBlocks,
       },
     };
+  }
+
+  /**
+   * 4. POST /admin/sub-admins/:id/reset-password
+   * Super Admin resets password of another administrator.
+   */
+  async resetAdminPassword(adminId: string, dto: ResetAdminPasswordDto, session: any) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Admin password resets are strictly restricted to Super Administrators.',
+      });
+    }
+
+    if (adminId === session.adminId) {
+      throw new BadRequestException({
+        error: 'CANNOT_RESET_OWN_PASSWORD_VIA_SUB_ADMIN',
+        message: 'Super Administrators cannot reset their own password via this endpoint.',
+      });
+    }
+
+    const targetUser = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.adminUser.findUnique({
+        where: { id: adminId },
+      });
+    });
+
+    if (!targetUser) {
+      throw new NotFoundException({
+        error: 'SUB_ADMIN_NOT_FOUND',
+        message: 'Target admin user not found.',
+      });
+    }
+
+    if (targetUser.role === 'super_admin') {
+      throw new BadRequestException({
+        error: 'CANNOT_MODIFY_SUPER_ADMIN',
+        message: 'Super Administrator accounts cannot be modified via sub-admin endpoints.',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword.trim(), 10);
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      await tx.adminUser.update({
+        where: { id: adminId },
+        data: { passwordHash },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'SUB_ADMIN_PASSWORD_RESET',
+          entityType: 'sub_admin',
+          entityId: adminId,
+          details: `Password reset for sub-admin ${targetUser.fullName} (${targetUser.username})`,
+        },
+      });
+    });
+
+    return { ok: true, message: `Password reset successfully for ${targetUser.username}.` };
   }
 }

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Query,
   Param,
@@ -17,6 +18,7 @@ import { CurrentSession } from '../common/decorators/current-session.decorator';
 import { ReservePlotDto } from './dto/reserve-plot.dto';
 import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
+import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
 
 @Controller('plots')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -73,5 +75,15 @@ export class PlotsController {
     @CurrentSession() session: any,
   ) {
     return this.plotsService.toggleAdjustment(id, dto, session);
+  }
+
+  @Patch(':id/price')
+  @HttpCode(HttpStatus.OK)
+  async updatePlotPrice(
+    @Param('id') id: string,
+    @Body() dto: UpdatePlotPriceDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.plotsService.updatePlotPrice(id, dto, session);
   }
 }

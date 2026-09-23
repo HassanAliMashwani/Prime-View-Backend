@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -22,6 +23,8 @@ import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
 import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
+import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
+import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
 import { updatePlotStatus } from '../plots/update-plot-status';
 
 @Injectable()
@@ -443,7 +446,13 @@ export class CustomersService {
 
     const plot = booking.plot;
     const now = new Date();
-    const initialPassword = dto.portalPassword?.trim() || 'password123';
+    if (!dto.portalPassword || dto.portalPassword.trim().length === 0) {
+      throw new BadRequestException({
+        error: 'PASSWORD_REQUIRED',
+        message: 'Portal password is required to complete member registration.',
+      });
+    }
+    const initialPassword = dto.portalPassword.trim();
     const passwordHash = await bcrypt.hash(initialPassword, 10);
 
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
@@ -694,7 +703,13 @@ export class CustomersService {
     const now = new Date();
     const customerId = `cust-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
-    const initialPassword = dto.portalPassword?.trim() || 'password123';
+    if (!dto.portalPassword || dto.portalPassword.trim().length === 0) {
+      throw new BadRequestException({
+        error: 'PASSWORD_REQUIRED',
+        message: 'Portal password is required for member account creation.',
+      });
+    }
+    const initialPassword = dto.portalPassword.trim();
     const passwordHash = await bcrypt.hash(initialPassword, 10);
 
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
@@ -1501,5 +1516,145 @@ export class CustomersService {
 
     return { ok: true, customer: updated };
   }
+
+  /**
+   * PATCH /customers/:id/profile
+   * Self-service profile update for logged-in customer.
+   */
+  async updateProfile(id: string, dto: UpdateCustomerProfileDto, session: any) {
+    if (session.role === 'customer' && session.customerId !== id) {
+      throw new ForbiddenException({
+        error: 'IDENTITY_REJECTED',
+        message: 'You can only update your own customer profile.',
+      });
+    }
+
+    const existing = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.customer.findUnique({ where: { id } });
+    });
+
+    if (!existing) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    if (session.role !== 'super_admin' && session.role !== 'customer') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to update this customer profile.',
+      });
+    }
+
+    const updated = await this.prisma.withScopedSession(session, async (tx) => {
+      const cust = await tx.customer.update({
+        where: { id },
+        data: {
+          phone: dto.phone !== undefined ? dto.phone.trim() : undefined,
+          email: dto.email !== undefined ? dto.email.trim() : undefined,
+          mailingAddress: dto.mailingAddress !== undefined ? dto.mailingAddress.trim() : undefined,
+          city: dto.city !== undefined ? dto.city.trim() : undefined,
+          fatherOrHusbandName: dto.fatherOrHusbandName !== undefined ? dto.fatherOrHusbandName.trim() : undefined,
+          nokName: dto.nokName !== undefined ? dto.nokName.trim() : undefined,
+          nokCnic: dto.nokCnic !== undefined ? dto.nokCnic.trim() : undefined,
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.customerId || session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'CUSTOMER_PROFILE_UPDATED',
+          entityType: 'customer',
+          entityId: id,
+          details: `Customer ${cust.fullName} profile updated`,
+          oldValue: {
+            phone: existing.phone,
+            email: existing.email,
+            mailingAddress: existing.mailingAddress,
+            city: existing.city,
+          },
+          newValue: {
+            phone: cust.phone,
+            email: cust.email,
+            mailingAddress: cust.mailingAddress,
+            city: cust.city,
+          },
+        },
+      });
+
+      return cust;
+    });
+
+    return { ok: true, customer: updated };
+  }
+
+  /**
+   * POST /customers/:id/change-password
+   * Customer password change self-service.
+   */
+  async changePassword(id: string, dto: ChangeCustomerPasswordDto, session: any) {
+    if (session.role === 'customer' && session.customerId !== id) {
+      throw new ForbiddenException({
+        error: 'IDENTITY_REJECTED',
+        message: 'You can only change your own password.',
+      });
+    }
+
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.customer.findUnique({ where: { id } });
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    if (!customer.passwordHash) {
+      throw new BadRequestException({
+        error: 'NO_PASSWORD_SET',
+        message: 'No existing password has been set for this account.',
+      });
+    }
+
+    const isValid = await bcrypt.compare(dto.oldPassword, customer.passwordHash);
+    if (!isValid) {
+      throw new UnauthorizedException({
+        error: 'INVALID_CREDENTIALS',
+        message: 'Current password does not match.',
+      });
+    }
+
+    const newHash = await bcrypt.hash(dto.newPassword.trim(), 10);
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      await tx.customer.update({
+        where: { id },
+        data: {
+          passwordHash: newHash,
+          credentialsPending: false,
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.customerId || session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'CUSTOMER_PASSWORD_CHANGED',
+          entityType: 'customer',
+          entityId: id,
+          details: `Password changed for customer ${customer.fullName} (${customer.membershipNo})`,
+        },
+      });
+    });
+
+    return { ok: true, message: 'Password changed successfully.' };
+  }
 }
+
 

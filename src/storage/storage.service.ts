@@ -205,7 +205,7 @@ export class StorageService {
     // ── 3. Direct Storage Provider URL with HMAC Signature & Enforced Constraints ──
     // Direct presigned URL conforming to cloud storage protocol
     const signaturePayload = `${dto.bucket}:${key}:${normalizedMime}:${maxSizeBytes}:${expiresIn}:${Date.now()}`;
-    const hmacSecret = process.env.ADMIN_ACCESS_SECRET || 'primeview_storage_hmac_secret_2026';
+    const hmacSecret = process.env.STORAGE_SIGNING_SECRET || 'primeview_storage_hmac_secret_2026';
     const signature = crypto.createHmac('sha256', hmacSecret).update(signaturePayload).digest('hex');
 
     const storageDirectUrl = `${this.supabaseUrl}/storage/v1/object/${dto.bucket}/${key}?token=${signature}&contentType=${encodeURIComponent(normalizedMime)}&maxBytes=${maxSizeBytes}`;
@@ -279,7 +279,7 @@ export class StorageService {
 
     // Signed viewing URL with temporary HMAC token
     const tokenPayload = `${dto.bucket}:${dto.key}:${expiresIn}:${Date.now()}`;
-    const hmacSecret = process.env.ADMIN_ACCESS_SECRET || 'primeview_storage_hmac_secret_2026';
+    const hmacSecret = process.env.STORAGE_SIGNING_SECRET || 'primeview_storage_hmac_secret_2026';
     const viewToken = crypto.createHmac('sha256', hmacSecret).update(tokenPayload).digest('hex');
     const viewUrl = `${this.supabaseUrl}/storage/v1/object/sign/${dto.bucket}/${dto.key}?token=${viewToken}`;
 
