@@ -290,3 +290,6 @@ CREATE POLICY payment_allocation_insert ON "PaymentAllocation"
       )
     )
   );
+
+DROP POLICY IF EXISTS plot_status_history_select ON "PlotStatusHistory";
+DROP POLICY IF EXISTS plot_status_history_insert ON "PlotStatusHistory";

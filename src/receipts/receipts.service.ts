@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   ConflictException,
   BadRequestException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -477,13 +478,23 @@ export class ReceiptsService {
         
         const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
         if (engineResult.error) {
-           throw new ConflictException({ error: 'BALLOON_ERROR', message: engineResult.error });
+           throw new UnprocessableEntityException({ error: 'BALLOON_ERROR', message: engineResult.error });
         }
         
-        const isEqual = require('lodash/isEqual');
-        const oldPreview = receipt.previewData || {};
-        const newPreview = JSON.parse(JSON.stringify(engineResult));
-        if (!isEqual(oldPreview, newPreview) && !dto.confirmPreviewDrift) {
+        const oldPreview = receipt.previewData || { allocations: [] };
+        
+        // Sort both allocation arrays by paymentRecordId to safely stringify and compare
+        const sortAllocations = (a: any[]) => 
+          [...a].map(alloc => ({
+            paymentRecordId: alloc.paymentRecordId,
+            amountApplied: alloc.amountApplied,
+            allocationType: alloc.allocationType
+          })).sort((x, y) => x.paymentRecordId.localeCompare(y.paymentRecordId));
+          
+        const oldSorted = JSON.stringify(sortAllocations((oldPreview as any).allocations || []));
+        const newSorted = JSON.stringify(sortAllocations(engineResult.allocations));
+        
+        if (oldSorted !== newSorted && !dto.confirmPreviewDrift) {
            throw new ConflictException({
              error: 'PREVIEW_DRIFT',
              message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
