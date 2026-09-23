@@ -26,7 +26,7 @@ export const initialBlocks: Block[] = [
   {
     id: 'elite',
     name: 'Elite Block',
-    description: 'Exclusive cul-de-sac sector designed for serenity and privacy.',
+    description: 'Exclusive sector designed for serenity and privacy.',
     totalPlots: 310,
     amenities: ['Park', 'Play Ground'],
   },
