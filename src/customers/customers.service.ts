@@ -204,7 +204,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({
         where: { id },
         include: {
@@ -395,7 +395,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({
         where: { id },
         include: { bookings: { include: { plot: true } } },
@@ -414,7 +414,7 @@ export class CustomersService {
     }
 
     const targetMembershipNo = dto.membershipNo.trim();
-    const dupMem = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const dupMem = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findFirst({
         where: {
           membershipNo: { equals: targetMembershipNo, mode: 'insensitive' },
@@ -679,7 +679,7 @@ export class CustomersService {
 
     // Membership uniqueness check
     const targetMembershipNo = dto.membershipNo.trim();
-    const dupMem = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const dupMem = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findFirst({
         where: { membershipNo: { equals: targetMembershipNo, mode: 'insensitive' } },
       });
@@ -967,7 +967,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({ where: { id: customerId } });
     });
 
@@ -1209,7 +1209,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({ where: { id } });
     });
 
@@ -1344,7 +1344,7 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({
         where: { id: customerId },
         include: { bookings: { include: { plot: true } } },
@@ -1428,7 +1428,7 @@ export class CustomersService {
       });
     }
 
-    const doc = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const doc = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customerDocument.findUnique({
         where: { id: docId },
         include: { customer: { include: { bookings: { include: { plot: true } } } } },
@@ -1489,7 +1489,7 @@ export class CustomersService {
       });
     }
 
-    const updated = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const updated = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.update({
         where: { id },
         data: {

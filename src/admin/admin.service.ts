@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
+import { MODULE_REGISTRY } from '../common/constants/module-registry';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -103,7 +104,7 @@ export class AdminService {
     }
 
     // Uniqueness checks
-    const existingUser = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const existingUser = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.adminUser.findFirst({
         where: {
           OR: [{ username: trimmedUsername }, { email: trimmedEmail }],
@@ -127,16 +128,10 @@ export class AdminService {
     }
 
     const passwordHash = await bcrypt.hash(dto.password.trim(), 10);
-    const sanitizedPermissions = {
-      can_reserve: Boolean(dto.permissions?.can_reserve),
-      can_book: Boolean(dto.permissions?.can_book),
-      can_create_customer: Boolean(dto.permissions?.can_create_customer),
-      can_view_customers: Boolean(dto.permissions?.can_view_customers),
-      can_view_sales_reports: Boolean(dto.permissions?.can_view_sales_reports),
-      can_edit_content: Boolean(dto.permissions?.can_edit_content),
-      can_verify_receipts: Boolean(dto.permissions?.can_verify_receipts),
-      can_view_sales_history: Boolean(dto.permissions?.can_view_sales_history),
-    };
+    const sanitizedPermissions: Record<string, boolean> = {};
+    for (const item of MODULE_REGISTRY) {
+      sanitizedPermissions[item.key] = Boolean(dto.permissions?.[item.key as keyof typeof dto.permissions]);
+    }
 
     const newAdminId = `admin-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const assignedBlocks = dto.assignedBlocks || [];
@@ -217,7 +212,7 @@ export class AdminService {
       });
     }
 
-    const targetUser = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const targetUser = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.adminUser.findUnique({
         where: { id: adminId },
         include: { assignments: true },
@@ -246,16 +241,13 @@ export class AdminService {
     };
 
     const updatedPermissions = dto.permissions
-      ? {
-          can_reserve: Boolean(dto.permissions.can_reserve),
-          can_book: Boolean(dto.permissions.can_book),
-          can_create_customer: Boolean(dto.permissions.can_create_customer),
-          can_view_customers: Boolean(dto.permissions.can_view_customers),
-          can_view_sales_reports: Boolean(dto.permissions.can_view_sales_reports),
-          can_edit_content: Boolean(dto.permissions.can_edit_content),
-          can_verify_receipts: Boolean(dto.permissions.can_verify_receipts),
-          can_view_sales_history: Boolean(dto.permissions.can_view_sales_history),
-        }
+      ? MODULE_REGISTRY.reduce((acc, item) => {
+          const key = item.key;
+          acc[key] = dto.permissions?.[key as keyof typeof dto.permissions] !== undefined
+            ? Boolean(dto.permissions[key as keyof typeof dto.permissions])
+            : Boolean((targetUser.permissions as any)?.[key]);
+          return acc;
+        }, {} as Record<string, boolean>)
       : targetUser.permissions;
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {

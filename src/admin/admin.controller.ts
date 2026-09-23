@@ -15,11 +15,17 @@ import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
 import { CurrentSession } from '../common/decorators/current-session.decorator';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
+import { MODULE_REGISTRY } from '../common/constants/module-registry';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
+
+  @Get('modules')
+  async getModules() {
+    return { ok: true, modules: MODULE_REGISTRY };
+  }
 
   @Get('sub-admins')
   async getSubAdmins(@CurrentSession() session: any) {

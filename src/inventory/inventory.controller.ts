@@ -1,14 +1,17 @@
 import { Controller, Get, Query, Req, UseGuards, BadRequestException } from '@nestjs/common';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
 import { Request } from 'express';
 
 @Controller('inventory')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionScopeGuard)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
   @Get('stats')
+  @RequirePermission('can_view_inventory')
   async getInventoryStats(
     @Req() req: Request,
     @Query('from') from?: string,

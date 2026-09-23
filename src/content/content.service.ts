@@ -24,18 +24,23 @@ export class ContentService {
    * 1. GET /content
    * List all CMS content blocks with optional section filtering ('plans' | 'events').
    */
-  async getContentBlocks(section?: 'plans' | 'events') {
+  async getContentBlocks(section?: 'plans' | 'events', session?: any) {
     const where: any = {};
     if (section) {
       where.section = section as ContentSection;
     }
 
-    const blocks = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-      return tx.contentBlock.findMany({
-        where,
-        orderBy: { lastModifiedAt: 'desc' },
-      });
-    });
+    const blocks = session
+      ? await this.prisma.withScopedSession(session, async (tx) => {
+          return tx.contentBlock.findMany({
+            where,
+            orderBy: { lastModifiedAt: 'desc' },
+          });
+        })
+      : await this.prisma.contentBlock.findMany({
+          where,
+          orderBy: { lastModifiedAt: 'desc' },
+        });
 
     // Check expired locks and enrich with lockedByName
     const now = Date.now();
@@ -47,11 +52,9 @@ export class ContentService {
         if (block.lockedBy && block.lockedAt) {
           if (now - block.lockedAt.getTime() <= this.lockExpiryMs) {
             isLockActive = true;
-            const admin = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-              return tx.adminUser.findUnique({
-                where: { id: block.lockedBy! },
-                select: { fullName: true, username: true },
-              });
+            const admin = await this.prisma.adminUser.findUnique({
+              where: { id: block.lockedBy! },
+              select: { fullName: true, username: true },
             });
             lockedByName = admin ? (admin.fullName || admin.username) : 'Another Administrator';
           }
@@ -83,7 +86,7 @@ export class ContentService {
 
     const now = new Date();
 
-    const block = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const block = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.contentBlock.findUnique({ where: { id: blockId } });
     });
 
@@ -97,11 +100,9 @@ export class ContentService {
     // Check if locked by another admin and not expired (30m)
     if (block.lockedBy && block.lockedBy !== session.adminId) {
       if (block.lockedAt && now.getTime() - block.lockedAt.getTime() <= this.lockExpiryMs) {
-        const lockingAdmin = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-          return tx.adminUser.findUnique({
-            where: { id: block.lockedBy! },
-            select: { fullName: true, username: true },
-          });
+        const lockingAdmin = await this.prisma.adminUser.findUnique({
+          where: { id: block.lockedBy! },
+          select: { fullName: true, username: true },
         });
 
         const lockedByName = lockingAdmin ? (lockingAdmin.fullName || lockingAdmin.username) : 'Another Administrator';
@@ -162,7 +163,7 @@ export class ContentService {
    * Release an active CMS content edit lock.
    */
   async releaseContentLock(blockId: string, session: any) {
-    const block = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const block = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.contentBlock.findUnique({ where: { id: blockId } });
     });
 
@@ -224,7 +225,7 @@ export class ContentService {
 
     const now = new Date();
 
-    const block = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const block = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.contentBlock.findUnique({ where: { id: blockId } });
     });
 
@@ -386,7 +387,7 @@ export class ContentService {
       });
     }
 
-    const block = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const block = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.contentBlock.findUnique({ where: { id: blockId } });
     });
 

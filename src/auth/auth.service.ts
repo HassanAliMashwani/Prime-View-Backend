@@ -14,11 +14,9 @@ export class AuthService {
   ) {}
 
   async adminLogin(username: string, pass: string) {
-    const user = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-      return tx.adminUser.findUnique({
-        where: { username },
-        include: { assignments: true },
-      });
+    const user = await this.prisma.adminUser.findUnique({
+      where: { username },
+      include: { assignments: true },
     });
 
     if (!user) {
@@ -37,11 +35,9 @@ export class AuthService {
       const newCount = user.failedLoginAttempts + 1;
       const lockedUntil = newCount >= this.MAX_ATTEMPTS ? new Date(Date.now() + this.LOCKOUT_DURATION_MS) : null;
       
-      await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-        return tx.adminUser.update({
-          where: { id: user.id },
-          data: { failedLoginAttempts: newCount, lockedUntil },
-        });
+      await this.prisma.adminUser.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: newCount, lockedUntil },
       });
 
       throw new UnauthorizedException('Invalid credentials');
@@ -49,11 +45,9 @@ export class AuthService {
 
     // Reset attempts on success
     if (user.failedLoginAttempts > 0) {
-      await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-        return tx.adminUser.update({
-          where: { id: user.id },
-          data: { failedLoginAttempts: 0, lockedUntil: null },
-        });
+      await this.prisma.adminUser.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
       });
     }
 
@@ -72,10 +66,8 @@ export class AuthService {
   }
 
   async memberLogin(membershipNo: string, pass: string) {
-    const customer = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-      return tx.customer.findUnique({
-        where: { membershipNo },
-      });
+    const customer = await this.prisma.customer.findUnique({
+      where: { membershipNo },
     });
 
     if (!customer) {
@@ -98,11 +90,9 @@ export class AuthService {
       const newCount = customer.failedLoginAttempts + 1;
       const lockedUntil = newCount >= this.MAX_ATTEMPTS ? new Date(Date.now() + this.LOCKOUT_DURATION_MS) : null;
       
-      await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-        return tx.customer.update({
-          where: { id: customer.id },
-          data: { failedLoginAttempts: newCount, lockedUntil },
-        });
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: { failedLoginAttempts: newCount, lockedUntil },
       });
 
       throw new UnauthorizedException('Invalid credentials');
@@ -110,15 +100,13 @@ export class AuthService {
 
     // Reset attempts on success
     if (customer.failedLoginAttempts > 0) {
-      await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-        return tx.customer.update({
-          where: { id: customer.id },
-          data: {
-            failedLoginAttempts: 0,
-            lockedUntil: null,
-            lastLogin: new Date(),
-          },
-        });
+      await this.prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          lastLogin: new Date(),
+        },
       });
     }
 

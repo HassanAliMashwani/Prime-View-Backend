@@ -23,8 +23,11 @@ export class ContentController {
   constructor(private readonly contentService: ContentService) {}
 
   @Get()
-  async getContentBlocks(@Query('section') section?: 'plans' | 'events') {
-    return this.contentService.getContentBlocks(section);
+  async getContentBlocks(
+    @Query('section') section?: 'plans' | 'events',
+    @CurrentSession() session?: any,
+  ) {
+    return this.contentService.getContentBlocks(section, session);
   }
 
   @Post()

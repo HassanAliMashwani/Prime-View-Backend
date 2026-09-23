@@ -24,5 +24,7 @@ export class UpdateSubAdminDto {
     can_view_sales_history?: boolean;
     can_edit_content?: boolean;
     can_verify_receipts?: boolean;
+    can_view_inventory?: boolean;
+    can_view_master_plan?: boolean;
   };
 }
