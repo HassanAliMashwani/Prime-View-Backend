@@ -8,6 +8,7 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  NotFoundException,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -80,6 +81,10 @@ export class ReceiptsController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Get('verify/:slipNumber')
   async publicVerifySlip(@Param('slipNumber') slipNumber: string) {
-    return this.receiptsService.publicVerifySlip(slipNumber);
+    const result = await this.receiptsService.publicVerifySlip(slipNumber);
+    if (!result.exists) {
+      throw new NotFoundException({ error: 'SLIP_NOT_FOUND', message: 'Slip number not found in registry' });
+    }
+    return result;
   }
 }

@@ -718,17 +718,16 @@ export class ReceiptsService {
   /**
    * 6. GET /receipts/verify/:slipNumber (PUBLIC)
    * Public endpoint to verify a receipt slip without authentication.
+   * Uses privileged Prisma (DB owner / no RLS session) — same path as login.
    */
   async publicVerifySlip(slipNumber: string) {
-    const receipt = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
-      return tx.receiptSubmission.findUnique({
-        where: { slipNumber },
-        include: {
-          customer: {
-            select: { fullName: true }
-          }
-        },
-      });
+    const receipt = await this.prisma.receiptSubmission.findUnique({
+      where: { slipNumber },
+      include: {
+        customer: {
+          select: { fullName: true }
+        }
+      },
     });
 
     if (!receipt) {
