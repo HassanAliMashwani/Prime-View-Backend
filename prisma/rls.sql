@@ -345,3 +345,46 @@ CREATE POLICY content_block_update_scope ON "ContentBlock"
       AND (current_setting('app.current_permissions', true)::jsonb ? 'can_edit_content')
     )
   );
+
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- PaymentAllocation
+DROP POLICY IF EXISTS "payment_allocation_select" ON "PaymentAllocation";
+CREATE POLICY "payment_allocation_select" ON "PaymentAllocation"
+  FOR SELECT TO app_user
+  USING (
+    current_setting('app.current_role', true) = 'super_admin' OR
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "ReceiptSubmission" r
+        JOIN "Booking" b ON r."bookingId" = b.id
+        JOIN "Plot" p ON b."plotId" = p.id
+        WHERE r.id = "receiptId" AND p."blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
+        )
+      )
+    ) OR
+    EXISTS (
+      SELECT 1 FROM "ReceiptSubmission" r 
+      WHERE r.id = "receiptId" AND r."customerId" = current_setting('app.current_customer_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS "payment_allocation_insert" ON "PaymentAllocation";
+CREATE POLICY "payment_allocation_insert" ON "PaymentAllocation"
+  FOR INSERT TO app_user
+  WITH CHECK (
+    current_setting('app.current_role', true) = 'super_admin' OR
+    (
+      current_setting('app.current_role', true) = 'sub_admin' AND
+      EXISTS (
+        SELECT 1 FROM "ReceiptSubmission" r
+        JOIN "Booking" b ON r."bookingId" = b.id
+        JOIN "Plot" p ON b."plotId" = p.id
+        WHERE r.id = "receiptId" AND p."blockId" IN (
+          SELECT "blockId" FROM "BlockAssignment" WHERE "adminId" = current_setting('app.current_admin_id', true)
+        )
+      )
+    )
+  );

@@ -16,6 +16,10 @@ export class SubmitReceiptDto {
   paymentType: 'installment' | 'one_time';
 
   @IsOptional()
+  @IsIn(['regular', 'balloon'])
+  paymentKind?: 'regular' | 'balloon';
+
+  @IsOptional()
   @IsNumber()
   installmentNumber?: number;
 

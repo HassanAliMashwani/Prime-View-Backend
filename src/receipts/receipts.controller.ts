@@ -46,6 +46,15 @@ export class ReceiptsController {
     return this.receiptsService.getCustomerReceipts(session);
   }
 
+  @Get('balloon-preview')
+  async getBalloonPreview(
+    @Query('bookingId') bookingId: string,
+    @Query('amount') amount: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.getBalloonPreview(bookingId, amount, session);
+  }
+
   @Post(':id/verify')
   @HttpCode(HttpStatus.OK)
   async verifyReceipt(

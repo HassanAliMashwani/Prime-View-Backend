@@ -4,4 +4,7 @@ export class VerifyReceiptDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  confirmPreviewDrift?: boolean;
 }

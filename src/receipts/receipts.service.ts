@@ -13,6 +13,7 @@ import { RejectReceiptDto } from './dto/reject-receipt.dto';
 import { ReceiptStatus } from '@prisma/client';
 
 import { StorageService } from '../storage/storage.service';
+import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
 
 @Injectable()
 export class ReceiptsService {
@@ -137,6 +138,40 @@ export class ReceiptsService {
       }
     }
 
+    // Check for balloon logic
+    let previewData: any = null;
+    let paymentKind = dto.paymentKind || 'regular';
+
+    if (paymentKind === 'balloon') {
+      if (dto.paymentType !== 'installment') {
+        throw new BadRequestException({
+          error: 'BALLOON_NOT_SUPPORTED',
+          message: 'Balloon payments are only supported for installments.',
+        });
+      }
+
+      // Calculate preview
+      const pendingInst = booking.payments
+        .filter((p) => p.feeType === 'plot_installment' && ['pending', 'overdue', 'partially_paid'].includes(p.status))
+        .map((p) => ({
+          id: p.id,
+          installmentNumber: p.installmentNumber,
+          dueDate: p.dueDate,
+          amount: Number(p.amount),
+          paidAmount: Number(p.paidAmount),
+          status: p.status,
+        }));
+
+      const res = allocateBalloon(Number(dto.amount), pendingInst);
+      if (res.error) {
+        throw new BadRequestException({
+          error: 'BALLOON_ENGINE_ERROR',
+          message: res.error,
+        });
+      }
+      previewData = res;
+    }
+
     // Check for existing pending receipt submission
     const pendingReceipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findFirst({
@@ -144,7 +179,7 @@ export class ReceiptsService {
           customerId: customer.id,
           bookingId: booking.id,
           status: 'pending',
-          ...(dto.paymentType === 'one_time' && targetPaymentRecord ? { paymentRecordId: targetPaymentRecord.id } : {}),
+          ...(paymentKind === 'balloon' ? {} : dto.paymentType === 'one_time' && targetPaymentRecord ? { paymentRecordId: targetPaymentRecord.id } : {}),
         },
       });
     });
@@ -174,6 +209,8 @@ export class ReceiptsService {
           transactionRef: dto.transactionRef.trim(),
           paymentDate: isNaN(paymentDateParsed.getTime()) ? now : paymentDateParsed,
           amount: dto.amount,
+          paymentKind: paymentKind,
+          previewData: previewData,
           receiptFileUrl: dto.receiptFileUrl.trim(),
           status: 'pending',
           uploadedAt: now,
@@ -330,6 +367,39 @@ export class ReceiptsService {
     return { ok: true, receipts: enriched };
   }
 
+  async getBalloonPreview(bookingId: string, amountStr: string, session: any) {
+    const amount = Number(amountStr);
+    if (isNaN(amount) || amount <= 0) {
+      throw new BadRequestException({ error: 'INVALID_AMOUNT', message: 'Amount must be a positive number.' });
+    }
+    const customerId = session.sub || session.id || session.customerId;
+    const booking = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.booking.findFirst({
+        where: { id: bookingId, status: 'active', customerId },
+        include: { payments: true },
+      });
+    });
+    if (!booking) throw new NotFoundException({ error: 'BOOKING_NOT_FOUND', message: 'Booking not found or not owned by you.' });
+    if (booking.paymentType !== 'installment') throw new BadRequestException({ error: 'BALLOON_NOT_SUPPORTED', message: 'Balloon payments are only for installments.' });
+
+    const pendingInst = booking.payments
+      .filter((p) => p.feeType === 'plot_installment' && ['pending', 'overdue', 'partially_paid'].includes(p.status))
+      .map((p) => ({
+        id: p.id,
+        installmentNumber: p.installmentNumber,
+        dueDate: p.dueDate,
+        amount: Number(p.amount),
+        paidAmount: Number(p.paidAmount),
+        status: p.status,
+      }));
+
+    const res = allocateBalloon(amount, pendingInst);
+    if (res.error) {
+      throw new BadRequestException({ error: 'BALLOON_ENGINE_ERROR', message: res.error });
+    }
+    return { ok: true, preview: res };
+  }
+
   /**
    * 4. POST /receipts/:id/verify
    * Verify and approve a submitted payment receipt.
@@ -346,7 +416,7 @@ export class ReceiptsService {
       });
     }
 
-    const receipt = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const receipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findUnique({
         where: { id: receiptId },
         include: {
@@ -390,8 +460,61 @@ export class ReceiptsService {
         },
       });
 
-      // 2. Reconcile PaymentRecord (only if not already paid/settled, e.g. plot_one_time documentation receipt)
-      if (receipt.paymentRecordId) {
+      let finalAllocations: any = null;
+      if (receipt.paymentKind === 'balloon') {
+        await tx.$executeRawUnsafe(`SELECT 1 FROM "Booking" WHERE id = $1 FOR UPDATE`, receipt.bookingId);
+        const payments = await tx.paymentRecord.findMany({
+          where: { bookingId: receipt.bookingId, feeType: 'plot_installment', status: { in: ['pending', 'overdue', 'partially_paid'] } }
+        });
+        const pendingInst = payments.map((p) => ({
+          id: p.id,
+          installmentNumber: p.installmentNumber,
+          dueDate: p.dueDate,
+          amount: Number(p.amount),
+          paidAmount: Number(p.paidAmount),
+          status: p.status,
+        }));
+        
+        const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
+        if (engineResult.error) {
+           throw new ConflictException({ error: 'BALLOON_ERROR', message: engineResult.error });
+        }
+        
+        const isEqual = require('lodash/isEqual');
+        const oldPreview = receipt.previewData || {};
+        const newPreview = JSON.parse(JSON.stringify(engineResult));
+        if (!isEqual(oldPreview, newPreview) && !dto.confirmPreviewDrift) {
+           throw new ConflictException({
+             error: 'PREVIEW_DRIFT',
+             message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
+             newPreview: engineResult
+           });
+        }
+        finalAllocations = engineResult.allocations;
+
+        for (const alloc of finalAllocations) {
+           await tx.paymentAllocation.create({
+             data: {
+               receiptId,
+               paymentRecordId: alloc.paymentRecordId,
+               amountApplied: alloc.amountApplied,
+               allocationType: alloc.allocationType
+             }
+           });
+           
+           const currentPr = await tx.paymentRecord.findUnique({ where: { id: alloc.paymentRecordId } });
+           if (currentPr) {
+             const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
+             await tx.paymentRecord.update({
+               where: { id: currentPr.id },
+               data: {
+                 paidAmount: newPaidAmount,
+                 status: newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid',
+               }
+             });
+           }
+        }
+      } else if (receipt.paymentRecordId) {
         const currentPr = await tx.paymentRecord.findUnique({
           where: { id: receipt.paymentRecordId },
         });
@@ -468,7 +591,7 @@ export class ReceiptsService {
       });
     }
 
-    const receipt = await this.prisma.withScopedSession({ role: 'super_admin' }, async (tx) => {
+    const receipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findUnique({
         where: { id: receiptId },
         include: {

@@ -48,6 +48,11 @@ enum PaymentType {
   one_time
 }
 
+enum PaymentKind {
+  regular
+  balloon
+}
+
 enum FeeType {
   admission_fee
   share_subscription_fee
@@ -282,6 +287,7 @@ model PaymentRecord {
   amount            Decimal       @db.Decimal(14, 2)
   paidAmount        Decimal       @default(0) @db.Decimal(14, 2)
   status            PaymentStatus @default(pending)
+  allocations       PaymentAllocation[]
 
   @@index([bookingId, feeType])
 }
@@ -297,6 +303,8 @@ model ReceiptSubmission {
   transactionRef    String
   paymentDate       DateTime
   amount            Decimal       @db.Decimal(14, 2)
+  paymentKind       PaymentKind   @default(regular)
+  previewData       Json?
   receiptFileUrl    String // real object storage URL in production
   status            ReceiptStatus @default(pending)
   verifiedByAdminId String?
@@ -305,8 +313,23 @@ model ReceiptSubmission {
   slipNumber        String?       @unique
   securityHash      String?
   uploadedAt        DateTime      @default(now())
+  allocations       PaymentAllocation[]
 
   @@index([customerId, status])
+}
+
+model PaymentAllocation {
+  id              String             @id @default(uuid())
+  receiptId       String
+  receipt         ReceiptSubmission  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  paymentRecordId String
+  paymentRecord   PaymentRecord      @relation(fields: [paymentRecordId], references: [id], onDelete: Restrict)
+  amountApplied   Decimal            @db.Decimal(14, 2)
+  allocationType  String             // 'full' or 'partial'
+  createdAt       DateTime           @default(now())
+
+  @@index([receiptId])
+  @@index([paymentRecordId])
 }
 
 // ── 6. Physical Customer Documents (uploaded by admin) ──
