@@ -14,6 +14,10 @@ export class UpdateSubAdminDto {
   assignedBlocks?: string[];
 
   @IsOptional()
+  @IsString()
+  password?: string;
+
+  @IsOptional()
   @IsObject()
   permissions?: {
     can_reserve?: boolean;

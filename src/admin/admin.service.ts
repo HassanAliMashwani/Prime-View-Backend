@@ -250,12 +250,18 @@ export class AdminService {
         }, {} as Record<string, boolean>)
       : targetUser.permissions;
 
+    let passwordHash: string | undefined = undefined;
+    if (dto.password && dto.password.trim().length > 0) {
+      passwordHash = await bcrypt.hash(dto.password.trim(), 10);
+    }
+
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       const updated = await tx.adminUser.update({
         where: { id: adminId },
         data: {
           fullName: dto.fullName !== undefined ? dto.fullName.trim() : undefined,
           status: dto.status !== undefined ? dto.status : undefined,
+          passwordHash: passwordHash !== undefined ? passwordHash : undefined,
           permissions: updatedPermissions,
         },
       });
