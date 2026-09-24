@@ -5,6 +5,7 @@ import {
   ConflictException,
   BadRequestException,
   UnprocessableEntityException,
+  HttpException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -60,16 +61,112 @@ export class ReceiptsService {
 
     // Post-Upload Verification Step (Method B - Doc 10 §6)
     if (dto.receiptFileUrl) {
-      const rawKey = dto.receiptFileUrl.includes('receipts:')
-        ? dto.receiptFileUrl.split('receipts:')[1]
-        : dto.receiptFileUrl.split('/receipts/')[1] || dto.receiptFileUrl;
-      const cleanKey = rawKey.split('?')[0].trim();
-      const fileCheck = await this.storageService.verifyUploadedObject('receipts', cleanKey, 'image/jpeg');
-      if (!fileCheck.valid) {
-        throw new BadRequestException({
-          error: fileCheck.error || 'INVALID_UPLOADED_FILE',
-          message: `Receipt upload rejected: ${fileCheck.error}`,
-        });
+      const trimmedUrl = dto.receiptFileUrl.trim();
+      if (trimmedUrl.startsWith('data:')) {
+        // Parse data:<mime>;base64,<payload>
+        const match = trimmedUrl.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?;base64,(.+)$/s);
+        if (!match) {
+          throw new BadRequestException({
+            error: 'INVALID_DATA_URL',
+            message: 'Receipt upload rejected: INVALID_DATA_URL',
+          });
+        }
+
+        const dataMime = (match[1] || '').toLowerCase().trim();
+        const base64Payload = match[2].trim();
+
+        if (!base64Payload) {
+          throw new BadRequestException({
+            error: 'INVALID_DATA_URL',
+            message: 'Receipt upload rejected: INVALID_DATA_URL',
+          });
+        }
+
+        // Cap decoded size before allocating huge buffers (reject over bucket maxSizeKb, 5MB = 5120 * 1024)
+        const maxBytes = 5120 * 1024;
+        let padding = 0;
+        if (base64Payload.endsWith('==')) padding = 2;
+        else if (base64Payload.endsWith('=')) padding = 1;
+        const estimatedSize = Math.floor((base64Payload.length * 3) / 4) - padding;
+        if (estimatedSize > maxBytes) {
+          throw new BadRequestException({
+            error: 'FILE_TOO_LARGE',
+            message: 'Receipt upload rejected: FILE_TOO_LARGE',
+          });
+        }
+
+        let buffer: Buffer;
+        try {
+          buffer = Buffer.from(base64Payload, 'base64');
+          if (buffer.length === 0) {
+            throw new Error('Empty buffer');
+          }
+        } catch {
+          throw new BadRequestException({
+            error: 'INVALID_DATA_URL',
+            message: 'Receipt upload rejected: INVALID_DATA_URL',
+          });
+        }
+
+        if (buffer.length > maxBytes) {
+          throw new BadRequestException({
+            error: 'FILE_TOO_LARGE',
+            message: 'Receipt upload rejected: FILE_TOO_LARGE',
+          });
+        }
+
+        // Synthetic object name for data URLs: use receiptFileName if present and has an allowed extension, else upload.jpg
+        let syntheticName = 'upload.jpg';
+        if (dto.receiptFileName && typeof dto.receiptFileName === 'string') {
+          const dotIdx = dto.receiptFileName.lastIndexOf('.');
+          if (dotIdx > 0) {
+            const ext = dto.receiptFileName.substring(dotIdx + 1).toLowerCase();
+            const EXT_TO_MIME: Record<string, string> = {
+              jpg: 'image/jpeg',
+              jpeg: 'image/jpeg',
+              png: 'image/png',
+              webp: 'image/webp',
+              pdf: 'application/pdf',
+            };
+            if (EXT_TO_MIME[ext]) {
+              syntheticName = dto.receiptFileName;
+            }
+          }
+        }
+        if (syntheticName === 'upload.jpg') {
+          if (dataMime === 'image/png') syntheticName = 'upload.png';
+          else if (dataMime === 'application/pdf') syntheticName = 'upload.pdf';
+          else if (dataMime === 'image/webp') syntheticName = 'upload.webp';
+        }
+
+        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+        const expectedMime = allowedMimes.includes(dataMime) ? dataMime : (dataMime || 'image/jpeg');
+
+        const fileCheck = await this.storageService.verifyUploadedObject(
+          'receipts',
+          syntheticName,
+          expectedMime,
+          maxBytes,
+          buffer,
+        );
+        if (!fileCheck.valid) {
+          throw new BadRequestException({
+            error: fileCheck.error || 'INVALID_UPLOADED_FILE',
+            message: `Receipt upload rejected: ${fileCheck.error}`,
+          });
+        }
+      } else {
+        const rawKey = trimmedUrl.includes('receipts:')
+          ? trimmedUrl.split('receipts:')[1]
+          : trimmedUrl.split('/receipts/')[1] || trimmedUrl;
+        const cleanKey = rawKey.split('?')[0].trim();
+        const fileCheck = await this.storageService.verifyUploadedObject('receipts', cleanKey, 'image/jpeg');
+        if (!fileCheck.valid) {
+          throw new BadRequestException({
+            error: fileCheck.error || 'INVALID_UPLOADED_FILE',
+            message: `Receipt upload rejected: ${fileCheck.error}`,
+          });
+        }
       }
     }
 
@@ -369,18 +466,42 @@ export class ReceiptsService {
     return { ok: true, receipts: enriched };
   }
 
-  async getBalloonPreview(bookingId: string, amountStr: string, session: any) {
+  async getBalloonPreview(
+    bookingId: string | undefined,
+    plotId: string | undefined,
+    amountStr: string,
+    session: any,
+  ) {
     const amount = Number(amountStr);
     if (isNaN(amount) || amount <= 0) {
       throw new BadRequestException({ error: 'INVALID_AMOUNT', message: 'Amount must be a positive number.' });
     }
+
+    const cleanBookingId = bookingId ? String(bookingId).trim() : '';
+    const cleanPlotId = plotId ? String(plotId).trim() : '';
+
+    if (!cleanBookingId && !cleanPlotId) {
+      throw new BadRequestException({
+        error: 'PLOT_OR_BOOKING_REQUIRED',
+        message: 'plotId or bookingId is required.',
+      });
+    }
+
     const customerId = session.sub || session.id || session.customerId;
     const booking = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.booking.findFirst({
-        where: { id: bookingId, status: { in: ['active', 'completed'] }, customerId },
-        include: { payments: true },
-      });
+      if (cleanBookingId) {
+        return tx.booking.findFirst({
+          where: { id: cleanBookingId, status: { in: ['active', 'completed'] }, customerId },
+          include: { payments: true },
+        });
+      } else {
+        return tx.booking.findFirst({
+          where: { plotId: cleanPlotId, status: { in: ['active', 'completed'] }, customerId },
+          include: { payments: true },
+        });
+      }
     });
+
     if (!booking) throw new NotFoundException({ error: 'BOOKING_NOT_FOUND', message: 'Booking not found or not owned by you.' });
     if (booking.paymentType !== 'installment') throw new BadRequestException({ error: 'BALLOON_NOT_SUPPORTED', message: 'Balloon payments are only for installments.' });
 
@@ -399,7 +520,25 @@ export class ReceiptsService {
     if (res.error) {
       throw new BadRequestException({ error: 'BALLOON_ENGINE_ERROR', message: res.error });
     }
-    return { ok: true, preview: res };
+
+    const baseAllocations = Array.isArray(res.allocations) ? res.allocations : [];
+    const enrichedAllocations = baseAllocations.map((a) => {
+      const match = pendingInst.find((p) => p.id === a.paymentRecordId);
+      return {
+        ...a,
+        installmentNumber: match?.installmentNumber ?? null,
+      };
+    });
+
+    return {
+      ok: true,
+      allocations: enrichedAllocations,
+      preview: {
+        ...res,
+        allocations: enrichedAllocations,
+        remainingUnallocated: (res as any).remainingUnallocated ?? 0,
+      },
+    };
   }
 
   /**

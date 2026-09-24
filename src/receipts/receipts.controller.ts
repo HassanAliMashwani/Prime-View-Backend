@@ -49,11 +49,12 @@ export class ReceiptsController {
 
   @Get('balloon-preview')
   async getBalloonPreview(
+    @Query('plotId') plotId: string,
     @Query('bookingId') bookingId: string,
     @Query('amount') amount: string,
     @CurrentSession() session: any,
   ) {
-    return this.receiptsService.getBalloonPreview(bookingId, amount, session);
+    return this.receiptsService.getBalloonPreview(bookingId, plotId, amount, session);
   }
 
   @Post(':id/verify')
