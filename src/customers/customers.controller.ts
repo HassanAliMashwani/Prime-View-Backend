@@ -146,6 +146,25 @@ export class CustomersController {
     return this.customersService.acceptTerms(id, session);
   }
 
+  @Post(':id/reset-password')
+  @RequirePermission('can_view_customers')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Param('id') id: string, @CurrentSession() session: any) {
+    return this.customersService.adminResetPassword(id, session);
+  }
+
+  @Post(':id/issue-credentials')
+  @HttpCode(HttpStatus.OK)
+  async issueCredentials(@Param('id') id: string, @CurrentSession() session: any) {
+    return this.customersService.adminIssueCredentials(id, session);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  async deleteCustomer(@Param('id') id: string, @CurrentSession() session: any) {
+    return this.customersService.adminDeleteCustomer(id, session);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentSession() session: any) {
     return this.customersService.findOne(id, session);

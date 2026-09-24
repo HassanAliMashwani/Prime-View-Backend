@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import {
   PaymentType,
   FeeType,
@@ -1667,6 +1668,281 @@ export class CustomersService {
     });
 
     return { ok: true, message: 'Password changed successfully.' };
+  }
+
+  private generatePortalPassword(): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const bytes = crypto.randomBytes(14);
+    let out = '';
+    for (let i = 0; i < 14; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  }
+
+  private assertAdminCustomerAccess(session: any, { superOnly = false } = {}) {
+    const isSuper = session.role === 'super_admin';
+    if (superOnly && !isSuper) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'Only Super Admin can perform this action.',
+      });
+    }
+    if (!isSuper && !session.permissions?.can_view_customers) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to manage customer portal access.',
+      });
+    }
+  }
+
+  /**
+   * Admin Reset Password (Super Admin or can_view_customers).
+   */
+  async adminResetPassword(id: string, session: any) {
+    this.assertAdminCustomerAccess(session);
+
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.customer.findUnique({
+        where: { id },
+      });
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    if (customer.registrationStatus === 'minimal') {
+      throw new BadRequestException({
+        error: 'CREDENTIALS_NOT_READY',
+        message: 'Complete registration before resetting a portal password.',
+      });
+    }
+
+    const plain = this.generatePortalPassword();
+    const hash = await bcrypt.hash(plain, 10);
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      await tx.customer.update({
+        where: { id },
+        data: {
+          passwordHash: hash,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          credentialsPending: false,
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.id || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'CUSTOMER_PASSWORD_RESET',
+          entityType: 'customer',
+          entityId: id,
+          details: `Password reset for ${customer.fullName} (${customer.membershipNo || 'No membership #'})`,
+        },
+      });
+    });
+
+    return {
+      ok: true,
+      username: customer.membershipNo,
+      newPassword: plain,
+      customerId: id,
+    };
+  }
+
+  /**
+   * Admin Issue Credentials (Super Admin only).
+   */
+  async adminIssueCredentials(id: string, session: any) {
+    this.assertAdminCustomerAccess(session, { superOnly: true });
+
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.customer.findUnique({
+        where: { id },
+      });
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    if (customer.registrationStatus === 'minimal') {
+      throw new BadRequestException({
+        error: 'CREDENTIALS_NOT_READY',
+        message: 'Complete registration first.',
+      });
+    }
+
+    const plain = this.generatePortalPassword();
+    const hash = await bcrypt.hash(plain, 10);
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      await tx.customer.update({
+        where: { id },
+        data: {
+          passwordHash: hash,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          credentialsPending: false,
+        },
+      });
+
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.id || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'CUSTOMER_CREDENTIALS_ISSUED',
+          entityType: 'customer',
+          entityId: id,
+          details: `Credentials issued for ${customer.fullName} (${customer.membershipNo || 'No membership #'})`,
+        },
+      });
+    });
+
+    return {
+      ok: true,
+      username: customer.membershipNo,
+      password: plain,
+      customerId: id,
+    };
+  }
+
+  /**
+   * Admin Delete Customer (Super Admin only).
+   */
+  async adminDeleteCustomer(id: string, session: any) {
+    this.assertAdminCustomerAccess(session, { superOnly: true });
+
+    const customer = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.customer.findUnique({
+        where: { id },
+        include: {
+          bookings: {
+            include: {
+              plot: true,
+              payments: true,
+            },
+          },
+          receipts: true,
+        },
+      });
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer not found.',
+      });
+    }
+
+    // Refuse live plots: any booking whose plot.status is booked or allotted
+    for (const booking of customer.bookings) {
+      if (booking.plot && (booking.plot.status === 'booked' || booking.plot.status === 'allotted')) {
+        throw new ConflictException({
+          error: 'CUSTOMER_HAS_LIVE_PLOTS',
+          message: 'Void or reassign live plots before deleting this member.',
+        });
+      }
+    }
+
+    // Refuse ledger: any PaymentRecord with status === 'paid' or paidAmount > 0, or any ReceiptSubmission with status === 'verified'
+    for (const booking of customer.bookings) {
+      for (const payment of booking.payments) {
+        if (payment.status === 'paid' || Number(payment.paidAmount) > 0) {
+          throw new ConflictException({
+            error: 'CUSTOMER_HAS_LEDGER',
+            message: 'This member has payment history and cannot be deleted.',
+          });
+        }
+      }
+    }
+
+    for (const receipt of customer.receipts) {
+      if (receipt.status === 'verified') {
+        throw new ConflictException({
+          error: 'CUSTOMER_HAS_LEDGER',
+          message: 'This member has payment history and cannot be deleted.',
+        });
+      }
+    }
+
+    // Delete customer and related empty/cancelled child records in one scoped transaction
+    await this.prisma.withScopedSession(session, async (tx) => {
+      // 1. Audit entry created first
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.id || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'CUSTOMER_DELETED',
+          entityType: 'customer',
+          entityId: id,
+          details: `Deleted customer ${customer.fullName} (${customer.membershipNo || 'No membership #'})`,
+        },
+      });
+
+      // 2. Receipt submissions (and payment allocations cascade/manual)
+      await tx.paymentAllocation.deleteMany({
+        where: { receipt: { customerId: id } },
+      });
+      await tx.receiptSubmission.deleteMany({
+        where: { customerId: id },
+      });
+
+      // 3. Documents
+      await tx.societyDocument.deleteMany({
+        where: { customerId: id },
+      });
+      await tx.customerDocument.deleteMany({
+        where: { customerId: id },
+      });
+
+      // 4. Payment records
+      await tx.paymentRecord.deleteMany({
+        where: { booking: { customerId: id } },
+      });
+
+      // 5. Bookings
+      await tx.booking.deleteMany({
+        where: { customerId: id },
+      });
+
+      // 6. Reservations
+      await tx.reservation.deleteMany({
+        where: { customerId: id },
+      });
+
+      // 7. Strikes
+      await tx.customerStrike.deleteMany({
+        where: { customerId: id },
+      });
+
+      // 8. Plots currentOwnerId clear if any
+      await tx.plot.updateMany({
+        where: { currentOwnerId: id },
+        data: { currentOwnerId: null },
+      });
+
+      // 9. Customer record
+      await tx.customer.delete({
+        where: { id },
+      });
+    });
+
+    return {
+      ok: true,
+      deletedId: id,
+      membershipNo: customer.membershipNo,
+    };
   }
 }
 
