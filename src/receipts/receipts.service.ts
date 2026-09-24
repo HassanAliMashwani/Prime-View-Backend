@@ -378,8 +378,8 @@ export class ReceiptsService {
       where.status = statusFilter as ReceiptStatus;
     }
 
-    const receipts = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.receiptSubmission.findMany({
+    const enriched = await this.prisma.withScopedSession(session, async (tx) => {
+      const receipts = await tx.receiptSubmission.findMany({
         where,
         include: {
           customer: {
@@ -398,32 +398,41 @@ export class ReceiptsService {
         },
         orderBy: { uploadedAt: 'desc' },
       });
-    });
 
-    const enriched = await Promise.all(receipts.map(async (r) => {
-      const booking = await this.prisma.booking.findUnique({
-        where: { id: r.bookingId },
-        include: { plot: true }
+      const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
+      const bookings = await tx.booking.findMany({
+        where: { id: { in: bookingIds } },
+        include: { plot: true },
       });
-      const paymentRecord = r.paymentRecordId ? await this.prisma.paymentRecord.findUnique({
-        where: { id: r.paymentRecordId }
-      }) : null;
+      const bookingMap = new Map(bookings.map((b) => [b.id, b]));
 
-      return {
-        ...r,
-        customerName: r.customer?.fullName,
-        membershipNo: r.customer?.membershipNo,
-        customerPhone: r.customer?.phone,
-        customerCnic: r.customer?.cnic,
-        customerStrikeCount: r.customer?.strikeCount || 0,
-        customerStrikeHistory: r.customer?.strikes || [],
-        plotId: booking?.plot?.id,
-        plotNumber: booking?.plot?.plotNumber,
-        blockName: booking?.plot?.blockId,
-        paymentType: booking?.paymentType,
-        installmentNumber: paymentRecord?.installmentNumber,
-      };
-    }));
+      const paymentRecordIds = [...new Set(receipts.map((r) => r.paymentRecordId).filter(Boolean) as string[])];
+      const paymentRecords = await tx.paymentRecord.findMany({
+        where: { id: { in: paymentRecordIds } },
+      });
+      const paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
+
+      return receipts.map((r) => {
+        const booking = bookingMap.get(r.bookingId);
+        const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
+
+        return {
+          ...r,
+          paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
+          customerName: r.customer?.fullName,
+          membershipNo: r.customer?.membershipNo,
+          customerPhone: r.customer?.phone,
+          customerCnic: r.customer?.cnic,
+          customerStrikeCount: r.customer?.strikeCount || 0,
+          customerStrikeHistory: r.customer?.strikes || [],
+          plotId: booking?.plot?.id,
+          plotNumber: booking?.plot?.plotNumber,
+          blockName: booking?.plot?.blockId,
+          paymentType: booking?.paymentType,
+          installmentNumber: paymentRecord?.installmentNumber,
+        };
+      });
+    });
 
     return { ok: true, receipts: enriched };
   }
@@ -437,31 +446,41 @@ export class ReceiptsService {
       ? sessionOrId
       : { role: 'customer', customerId: String(sessionOrId) };
     const customerId = session.customerId || session.id;
-    const receipts = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.receiptSubmission.findMany({
+
+    const enriched = await this.prisma.withScopedSession(session, async (tx) => {
+      const receipts = await tx.receiptSubmission.findMany({
         where: { customerId },
         orderBy: { uploadedAt: 'desc' },
       });
-    });
 
-    const enriched = await Promise.all(receipts.map(async (r) => {
-      const booking = await this.prisma.booking.findUnique({
-        where: { id: r.bookingId },
-        include: { plot: true }
+      const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
+      const bookings = await tx.booking.findMany({
+        where: { id: { in: bookingIds } },
+        include: { plot: true },
       });
-      const paymentRecord = r.paymentRecordId ? await this.prisma.paymentRecord.findUnique({
-        where: { id: r.paymentRecordId }
-      }) : null;
+      const bookingMap = new Map(bookings.map((b) => [b.id, b]));
 
-      return {
-        ...r,
-        plotId: booking?.plot?.id,
-        plotNumber: booking?.plot?.plotNumber,
-        blockName: booking?.plot?.blockId,
-        paymentType: booking?.paymentType,
-        installmentNumber: paymentRecord?.installmentNumber,
-      };
-    }));
+      const paymentRecordIds = [...new Set(receipts.map((r) => r.paymentRecordId).filter(Boolean) as string[])];
+      const paymentRecords = await tx.paymentRecord.findMany({
+        where: { id: { in: paymentRecordIds } },
+      });
+      const paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
+
+      return receipts.map((r) => {
+        const booking = bookingMap.get(r.bookingId);
+        const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
+
+        return {
+          ...r,
+          paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
+          plotId: booking?.plot?.id,
+          plotNumber: booking?.plot?.plotNumber,
+          blockName: booking?.plot?.blockId,
+          paymentType: booking?.paymentType,
+          installmentNumber: paymentRecord?.installmentNumber,
+        };
+      });
+    });
 
     return { ok: true, receipts: enriched };
   }
@@ -691,30 +710,30 @@ export class ReceiptsService {
       let promotedPlotNumber: string | null = null;
       let promotedBlockId: string | null = null;
 
-      if (plotPromoted) {
-        const booking = await tx.booking.findUnique({
-          where: { id: receipt.bookingId },
-          include: { plot: true },
-        });
-        if (booking?.plot) {
-          promotedPlotId = booking.plot.id;
-          promotedPlotNumber = booking.plot.plotNumber;
-          promotedBlockId = booking.plot.blockId;
+      const booking = await tx.booking.findUnique({
+        where: { id: receipt.bookingId },
+        include: { plot: true },
+      });
+      const plotId = booking?.plotId || booking?.plot?.id || null;
 
-          await tx.auditEntry.create({
-            data: {
-              actorId: session.adminId || session.username,
-              actorName: session.fullName || session.username,
-              actorRole: session.role,
-              action: 'PLOT_STATUS_CHANGED',
-              entityType: 'plot',
-              entityId: booking.plot.id,
-              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
-              oldValue: { status: 'booked' },
-              newValue: { status: 'allotted' },
-            },
-          });
-        }
+      if (plotPromoted && booking?.plot) {
+        promotedPlotId = booking.plot.id;
+        promotedPlotNumber = booking.plot.plotNumber;
+        promotedBlockId = booking.plot.blockId;
+
+        await tx.auditEntry.create({
+          data: {
+            actorId: session.adminId || session.username,
+            actorName: session.fullName || session.username,
+            actorRole: session.role,
+            action: 'PLOT_STATUS_CHANGED',
+            entityType: 'plot',
+            entityId: booking.plot.id,
+            details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
+            oldValue: { status: 'booked' },
+            newValue: { status: 'allotted' },
+          },
+        });
       }
       // ─────────────────────────────────────────────────────────────────────────
 
@@ -736,7 +755,7 @@ export class ReceiptsService {
         },
       });
 
-      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId };
+      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId, plotId };
     });
 
 
@@ -749,6 +768,7 @@ export class ReceiptsService {
     await this.realtime.broadcast('plots', 'PAYMENT_RECORD_UPDATED', {
       customerId: receipt.customerId,
       bookingId: receipt.bookingId,
+      plotId: result.plotId,
     });
 
     // If the last installment flipped the plot to 'allotted', broadcast map update
@@ -964,7 +984,7 @@ export class ReceiptsService {
       installmentNumber: isOneTime ? null : installmentNumber,
       paymentDetails,
       amount: receipt.amount,
-      paymentDate: receipt.paymentDate,
+      paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
       status: receipt.status,
     };
   }
