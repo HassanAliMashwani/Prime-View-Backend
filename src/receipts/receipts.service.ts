@@ -15,6 +15,7 @@ import { ReceiptStatus } from '@prisma/client';
 
 import { StorageService } from '../storage/storage.service';
 import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
+import { maybeAllotIfFullyPaid } from '../plots/update-plot-status';
 
 @Injectable()
 export class ReceiptsService {
@@ -78,7 +79,7 @@ export class ReceiptsService {
         where: {
           customerId: customer.id,
           plotId: dto.plotId,
-          status: 'active',
+          status: { in: ['active', 'completed'] },
         },
         include: {
           plot: true,
@@ -376,7 +377,7 @@ export class ReceiptsService {
     const customerId = session.sub || session.id || session.customerId;
     const booking = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.booking.findFirst({
-        where: { id: bookingId, status: 'active', customerId },
+        where: { id: bookingId, status: { in: ['active', 'completed'] }, customerId },
         include: { payments: true },
       });
     });
@@ -540,35 +541,26 @@ export class ReceiptsService {
         }
       }
 
-      // ── Auto-promote installment plot to 'allotted' when fully paid ──────────
-      // Only runs for installment bookings; one_time plots are already 'allotted'
-      // at booking creation time.
-      let plotPromoted = false;
+      // ── P3-ALLOT-LAST: Auto-promote plot to 'allotted' when fully paid ──────────
+      const plotPromoted = await maybeAllotIfFullyPaid(
+        tx,
+        receipt.bookingId,
+        session.adminId || session.username || 'system',
+      );
+
       let promotedPlotId: string | null = null;
       let promotedPlotNumber: string | null = null;
       let promotedBlockId: string | null = null;
 
-      const booking = await tx.booking.findUnique({
-        where: { id: receipt.bookingId },
-        include: { plot: true },
-      });
-
-      if (booking?.paymentType === 'installment' && booking.plot?.status === 'booked') {
-        const allInstallments = await tx.paymentRecord.findMany({
-          where: { bookingId: receipt.bookingId, feeType: 'plot_installment' },
-          select: { status: true },
+      if (plotPromoted) {
+        const booking = await tx.booking.findUnique({
+          where: { id: receipt.bookingId },
+          include: { plot: true },
         });
-
-        if (allInstallments.length > 0 && allInstallments.every((p) => p.status === 'paid')) {
-          plotPromoted = true;
-          promotedPlotId = booking.plotId;
+        if (booking?.plot) {
+          promotedPlotId = booking.plot.id;
           promotedPlotNumber = booking.plot.plotNumber;
           promotedBlockId = booking.plot.blockId;
-
-          await tx.plot.update({
-            where: { id: booking.plotId },
-            data: { status: 'allotted' },
-          });
 
           await tx.auditEntry.create({
             data: {
@@ -577,8 +569,8 @@ export class ReceiptsService {
               actorRole: session.role,
               action: 'PLOT_STATUS_CHANGED',
               entityType: 'plot',
-              entityId: booking.plotId,
-              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all ${allInstallments.length} installments cleared via receipt ${receiptId} (${slipNumber})`,
+              entityId: booking.plot.id,
+              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
               oldValue: { status: 'booked' },
               newValue: { status: 'allotted' },
             },
@@ -635,6 +627,7 @@ export class ReceiptsService {
     return {
       ok: true,
       plotPromoted: result.plotPromoted || false,
+      promotedPlotId: result.promotedPlotId || null,
       promotedPlotNumber: result.promotedPlotNumber || null,
       receipt: {
         ...result.receipt,

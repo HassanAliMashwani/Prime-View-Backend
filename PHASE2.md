@@ -37,8 +37,8 @@ npm run dev
 ---
 
 ## 3. Allocation Rule (D2)
-- **Allotted:** only `paymentType: one_time` (full upfront). That is paid-in-full.
-- **Booked:** installment stays `booked` after the last installment. It never flips to allotted.
+- **Allotted:** `paymentType: one_time` at book OR installment when the last payment on that booking is fully paid.
+- **Booked:** installment bookings remain `booked` while any installment or statutory payment remains outstanding.
 
 ---
 

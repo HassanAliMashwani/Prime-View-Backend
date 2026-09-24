@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { updatePlotStatus } from './update-plot-status';
+import { updatePlotStatus, maybeAllotIfFullyPaid } from './update-plot-status';
 import { ReservePlotDto } from './dto/reserve-plot.dto';
 import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
@@ -720,6 +720,8 @@ export class PlotsService {
       }
 
       await tx.paymentRecord.createMany({ data: paymentsToCreate });
+
+      await maybeAllotIfFullyPaid(tx, booking.id, session.adminId || session.username || 'system');
 
       // 7. Test-Only Failure Injection (Strictly gated: no-op outside test simulation environment)
       if (process.env.ENABLE_TEST_SIMULATIONS === 'true' && dto.simulateRollback) {

@@ -32,10 +32,9 @@
 
 ## 2. Seven Clarifications & Evidence (Amendments)
 
-### 2.1. Decision D2 Reversion & Plot Allotment Rule
-- **Approved Default:** **Allotted = full one-time payment only.**
-- **Installment Plots Rule:** Plots purchased via installment plans remain `booked` even after the final installment is paid. There is **NO** auto-transition from `booked` to `allotted` upon installment completion.
-- **Clarification:** Earlier assumption was based on general real estate deed issuance intuition; however, in PrimeView's domain model, installment plots stay `booked` indefinitely unless a separate administrative allotment workflow is explicitly commissioned. Phase 2 does not invent any such workflow.
+### 2.1. Decision D2 & Plot Allotment Rule (P3-ALLOT-LAST)
+- **Approved Rule:** **Allotted = `paymentType: one_time` at book OR installment when the last payment on that booking is fully paid.**
+- **Installment Plots Rule:** Plots purchased via installment plans remain `booked` while payments remain outstanding. Once every payment on that booking is cleared (admission fee, share subscription fee, downpayment, and all installments), `maybeAllotIfFullyPaid` atomically transitions the plot from `booked` to `allotted` with a `plot_status_history` row.
 
 ### 2.2. Inventory "Available as of To" — Selection of Option A (`plot_status_history`)
 To compute historical inventory accurately without guessing complex intervals across repeated reservations, releases, and cancellations:

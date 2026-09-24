@@ -25,7 +25,7 @@ import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto
 import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
 import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
-import { updatePlotStatus } from '../plots/update-plot-status';
+import { updatePlotStatus, maybeAllotIfFullyPaid } from '../plots/update-plot-status';
 import { calculateInstallmentDueDates } from '../common/installment-dates';
 
 @Injectable()
@@ -578,6 +578,8 @@ export class CustomersService {
         }
       }
 
+      await maybeAllotIfFullyPaid(tx, booking.id, session.adminId || session.username || 'system');
+
       // 5. Society Documents
       const agreementDoc = await tx.societyDocument.create({
         data: {
@@ -874,6 +876,8 @@ export class CustomersService {
         }
       }
 
+      await maybeAllotIfFullyPaid(tx, bookingId, session.adminId || session.username || 'system');
+
       // 7. Society Documents
       const confDoc = await tx.societyDocument.create({
         data: {
@@ -1145,6 +1149,8 @@ export class CustomersService {
           paymentRecords.push(instRec);
         }
       }
+
+      await maybeAllotIfFullyPaid(tx, bookingId, session.adminId || session.username || 'system');
 
       // 6. Society Documents
       const agrDoc = await tx.societyDocument.create({
