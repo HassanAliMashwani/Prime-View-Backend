@@ -22,7 +22,7 @@ const prisma = new PrismaClient({
 
 async function main() {
   console.log('Seeding database...');
-  const defaultHash = await bcrypt.hash('password123', 10);
+  const defaultHash = await bcrypt.hash('admin123', 10);
 
   // 1. Create Blocks
   for (const block of initialBlocks) {
