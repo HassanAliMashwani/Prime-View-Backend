@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Param,
   Body,
   UseGuards,
@@ -66,6 +67,15 @@ export class AdminController {
     @CurrentSession() session: any,
   ) {
     return this.adminService.resetAdminPassword(id, dto, session);
+  }
+
+  @Delete('sub-admins/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteSubAdmin(
+    @Param('id') id: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.adminService.deleteSubAdmin(id, session);
   }
 
   @Get('profile')

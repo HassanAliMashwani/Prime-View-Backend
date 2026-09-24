@@ -388,6 +388,89 @@ export class AdminService {
   }
 
   /**
+   * 4b. DELETE /admin/sub-admins/:id
+   * Super Admin permanently removes a sub-administrator account.
+   */
+  async deleteSubAdmin(adminId: string, session: any) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Sub Admin deletion is strictly restricted to Super Administrators.',
+      });
+    }
+
+    if (adminId === session.adminId) {
+      throw new BadRequestException({
+        error: 'CANNOT_DELETE_SELF',
+        message: 'Super Administrators cannot delete their own account.',
+      });
+    }
+
+    const targetUser = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.adminUser.findUnique({
+        where: { id: adminId },
+        include: { assignments: true },
+      });
+    });
+
+    if (!targetUser) {
+      throw new NotFoundException({
+        error: 'SUB_ADMIN_NOT_FOUND',
+        message: 'Sub-admin user not found.',
+      });
+    }
+
+    if (targetUser.role === 'super_admin') {
+      throw new BadRequestException({
+        error: 'CANNOT_DELETE_SUPER_ADMIN',
+        message: 'Super Administrator accounts cannot be deleted.',
+      });
+    }
+
+    await this.prisma.withScopedSession(session, async (tx) => {
+      // 1. Delete associated block assignments
+      await tx.blockAssignment.deleteMany({
+        where: { adminId },
+      });
+
+      // 2. Delete the administrator record
+      await tx.adminUser.delete({
+        where: { id: adminId },
+      });
+
+      // 3. Record audit entry for governance & compliance
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'SUB_ADMIN_DELETED',
+          entityType: 'sub_admin',
+          entityId: adminId,
+          details: `Deleted sub-admin ${targetUser.fullName} (@${targetUser.username})`,
+          oldValue: {
+            username: targetUser.username,
+            fullName: targetUser.fullName,
+            email: targetUser.email,
+            assignedBlocks: targetUser.assignments.map((a) => a.blockId),
+          },
+        },
+      });
+    });
+
+    await this.realtime.broadcast('sub_admins', 'SUB_ADMIN_DELETED', {
+      adminId,
+      username: targetUser.username,
+      fullName: targetUser.fullName,
+    });
+
+    return {
+      ok: true,
+      message: `Sub-administrator "${targetUser.fullName}" (@${targetUser.username}) has been permanently deleted.`,
+    };
+  }
+
+  /**
    * 5. GET /admin/profile
    * Self-service admin profile details.
    */
