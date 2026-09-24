@@ -4,12 +4,14 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
 import { ResetAdminPasswordDto } from './dto/reset-admin-password.dto';
+import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 import * as bcrypt from 'bcrypt';
 
@@ -383,5 +385,89 @@ export class AdminService {
     });
 
     return { ok: true, message: `Password reset successfully for ${targetUser.username}.` };
+  }
+
+  /**
+   * 5. GET /admin/profile
+   * Self-service admin profile details.
+   */
+  async getProfile(session: any) {
+    const adminId = session.adminId;
+    if (!adminId) {
+      throw new UnauthorizedException('Invalid session');
+    }
+
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { id: adminId },
+      include: { assignments: true },
+    });
+
+    if (!admin) {
+      throw new NotFoundException('Administrator account not found');
+    }
+
+    return {
+      ok: true,
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        fullName: admin.fullName,
+        role: admin.role,
+        status: admin.status,
+        permissions: admin.permissions,
+        assignedBlocks: admin.assignments.map((a) => a.blockId),
+        createdDate: admin.createdDate,
+        lastLogin: admin.lastLogin,
+      },
+    };
+  }
+
+  /**
+   * 6. POST /admin/change-password
+   * Administrator self-service password update.
+   */
+  async changeOwnPassword(dto: ChangeAdminPasswordDto, session: any) {
+    const adminId = session.adminId;
+    if (!adminId) {
+      throw new UnauthorizedException('Invalid session');
+    }
+
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { id: adminId },
+    });
+
+    if (!admin) {
+      throw new NotFoundException('Administrator account not found');
+    }
+
+    const isValid = await bcrypt.compare(dto.oldPassword, admin.passwordHash);
+    if (!isValid) {
+      throw new BadRequestException({
+        error: 'INVALID_CURRENT_PASSWORD',
+        message: 'Current password does not match.',
+      });
+    }
+
+    const passwordHash = await bcrypt.hash(dto.newPassword.trim(), 10);
+
+    await this.prisma.adminUser.update({
+      where: { id: adminId },
+      data: { passwordHash, failedLoginAttempts: 0, lockedUntil: null },
+    });
+
+    await this.prisma.auditEntry.create({
+      data: {
+        actorId: admin.id,
+        actorName: admin.fullName,
+        actorRole: admin.role,
+        action: 'ADMIN_PASSWORD_CHANGED',
+        entityType: 'admin_user',
+        entityId: admin.id,
+        details: `Password changed by administrator ${admin.fullName} (${admin.username})`,
+      },
+    });
+
+    return { ok: true, message: 'Password changed successfully.' };
   }
 }
