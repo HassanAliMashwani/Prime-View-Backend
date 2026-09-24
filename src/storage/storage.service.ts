@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { S3Client, PutObjectCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -322,7 +322,8 @@ export class StorageService {
   /**
    * Post-Upload Verification (Method B - Doc 10 §6):
    * Genuine post-upload check that inspects the real stored object's bytes, headers,
-   * and database metadata from the storage provider, preventing disguised or oversized files.
+   * downloaded securely via Storage HTTP GET with service role credentials, preventing
+   * disguised or oversized files.
    */
   async verifyUploadedObject(
     bucket: string,
@@ -334,10 +335,6 @@ export class StorageService {
     const config = BUCKET_CONFIGS[bucket];
     if (!config) {
       return { valid: false, error: 'INVALID_BUCKET' };
-    }
-
-    if (process.env.ENABLE_TEST_SIMULATIONS === 'true' && key.includes('test')) {
-      return { valid: true, sizeBytes: 1024, mimeType: 'image/jpeg' };
     }
 
     const limitBytes = maxSizeBytes || (config.maxSizeKb * 1024);
@@ -353,7 +350,7 @@ export class StorageService {
     }
 
     // Check 1b: Verify file extension from object key matches bucket policy
-    const cleanKey = key.split('?')[0];
+    const cleanKey = key.split('?')[0].trim();
     const dotIdx = cleanKey.lastIndexOf('.');
     if (dotIdx > 0) {
       const ext = cleanKey.substring(dotIdx + 1).toLowerCase();
@@ -374,129 +371,110 @@ export class StorageService {
       }
     }
 
-    // Check 2: Genuine Object Byte & Magic Number Inspection (if buffer is present)
-    if (contentBuffer && contentBuffer.length > 0) {
-      const realSize = contentBuffer.length;
-      if (realSize > limitBytes) {
-        return {
-          valid: false,
-          sizeBytes: realSize,
-          error: 'FILE_TOO_LARGE',
-        };
+    // Check 2: Obtain object buffer (either passed in or downloaded via Storage HTTP GET)
+    let bufferToInspect: Buffer | undefined = contentBuffer;
+
+    if (!bufferToInspect || bufferToInspect.length === 0) {
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!this.supabaseUrl || !serviceKey) {
+        return { valid: false, error: 'STORAGE_UNAVAILABLE' };
       }
 
-      const detected = this.detectRealMimeFromBytes(contentBuffer);
-      if (detected.isExecutable) {
-        return {
-          valid: false,
-          sizeBytes: realSize,
-          mimeType: detected.mimeType,
-          error: 'DISALLOWED_EXECUTABLE_CONTENT',
-        };
+      // Normalize key (strip leading bucket name or slashes if present)
+      let objectPath = cleanKey;
+      if (objectPath.startsWith(`${bucket}/`)) {
+        objectPath = objectPath.substring(bucket.length + 1);
+      } else if (objectPath.startsWith(`/${bucket}/`)) {
+        objectPath = objectPath.substring(bucket.length + 2);
+      }
+      if (objectPath.startsWith('/')) {
+        objectPath = objectPath.substring(1);
       }
 
-      if (!config.allowedMimeTypes.includes(detected.mimeType)) {
-        return {
-          valid: false,
-          sizeBytes: realSize,
-          mimeType: detected.mimeType,
-          error: 'MAGIC_BYTE_MISMATCH',
-        };
-      }
+      try {
+        const downloadUrl = `${this.supabaseUrl}/storage/v1/object/authenticated/${bucket}/${objectPath}`;
+        const res = await fetch(downloadUrl, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: serviceKey,
+          },
+        });
 
-      if (normalizedExpectedMime && detected.mimeType !== normalizedExpectedMime) {
-        return {
-          valid: false,
-          sizeBytes: realSize,
-          mimeType: detected.mimeType,
-          error: 'CONTENT_MIME_MISMATCH',
-        };
-      }
+        if (!res.ok) {
+          if (res.status === 404) {
+            return { valid: false, error: 'STORAGE_OBJECT_MISSING' };
+          }
+          if (res.status === 401 || res.status === 403) {
+            return { valid: false, error: 'STORAGE_FORBIDDEN' };
+          }
 
+          // Check if Supabase returned a JSON error payload
+          const errorJson = await res.json().catch(() => null);
+          if (
+            errorJson?.statusCode === '404' ||
+            errorJson?.error === 'not_found' ||
+            errorJson?.code === 'NoSuchKey'
+          ) {
+            return { valid: false, error: 'STORAGE_OBJECT_MISSING' };
+          }
+          if (errorJson?.statusCode === '401' || errorJson?.statusCode === '403') {
+            return { valid: false, error: 'STORAGE_FORBIDDEN' };
+          }
+
+          return { valid: false, error: 'STORAGE_UNAVAILABLE' };
+        }
+
+        const arrayBuf = await res.arrayBuffer();
+        bufferToInspect = Buffer.from(arrayBuf);
+      } catch (networkErr: any) {
+        this.logger.error(`Storage HTTP GET inspection failed: ${networkErr.message}`);
+        return { valid: false, error: 'STORAGE_UNAVAILABLE' };
+      }
+    }
+
+    // Check 3: Genuine byte-level size & magic number inspection
+    const realSize = bufferToInspect.length;
+    if (realSize > limitBytes) {
       return {
-        valid: true,
+        valid: false,
         sizeBytes: realSize,
-        mimeType: detected.mimeType,
+        error: 'FILE_TOO_LARGE',
       };
     }
 
-    // Check 3: Inspect real object metadata in PostgreSQL storage.objects table
-    try {
-      const objs: any[] = await this.prisma.$queryRawUnsafe(
-        'SELECT id, name, metadata FROM storage.objects WHERE bucket_id = $1 AND name = $2 LIMIT 1',
-        bucket,
-        cleanKey,
-      );
-
-      if (objs && objs.length > 0) {
-        const meta = objs[0].metadata || {};
-        const realSize = Number(meta.size || 0);
-        const realMime = String(meta.mimetype || '').toLowerCase().trim();
-
-        if (realSize > limitBytes) {
-          return { valid: false, sizeBytes: realSize, mimeType: realMime, error: 'FILE_TOO_LARGE' };
-        }
-        if (realMime && !config.allowedMimeTypes.includes(realMime)) {
-          return { valid: false, sizeBytes: realSize, mimeType: realMime, error: 'DISALLOWED_MIME_TYPE' };
-        }
-        if (normalizedExpectedMime && realMime && realMime !== normalizedExpectedMime) {
-          return { valid: false, sizeBytes: realSize, mimeType: realMime, error: 'CONTENT_MIME_MISMATCH' };
-        }
-
-        return { valid: true, sizeBytes: realSize, mimeType: realMime, realMetadata: meta };
-      }
-    } catch (dbErr) {
-      this.logger.debug(`Direct storage.objects inspection error: ${dbErr.message}`);
+    const detected = this.detectRealMimeFromBytes(bufferToInspect);
+    if (detected.isExecutable) {
+      return {
+        valid: false,
+        sizeBytes: realSize,
+        mimeType: detected.mimeType,
+        error: 'DISALLOWED_EXECUTABLE_CONTENT',
+      };
     }
 
-    // Check 4: If S3 client is configured, inspect directly via HeadObjectCommand
-    if (this.s3Client) {
-      try {
-        const head = await this.s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        const actualSize = head.ContentLength || 0;
-        const actualMime = (head.ContentType || '').toLowerCase().trim();
-
-        if (actualSize > limitBytes) {
-          return { valid: false, sizeBytes: actualSize, mimeType: actualMime, error: 'FILE_TOO_LARGE' };
-        }
-        if (normalizedExpectedMime && actualMime && actualMime !== normalizedExpectedMime) {
-          return { valid: false, sizeBytes: actualSize, mimeType: actualMime, error: 'INVALID_FILE_TYPE' };
-        }
-
-        return { valid: true, sizeBytes: actualSize, mimeType: actualMime };
-      } catch (err) {
-        return { valid: false, error: `S3 storage provider inspection error: ${err.message}` };
-      }
+    if (!config.allowedMimeTypes.includes(detected.mimeType)) {
+      return {
+        valid: false,
+        sizeBytes: realSize,
+        mimeType: detected.mimeType,
+        error: 'MAGIC_BYTE_MISMATCH',
+      };
     }
 
-    // Check 5: If Supabase Storage client is configured, inspect via Supabase API
-    if (this.supabase) {
-      try {
-        const { data, error } = await this.supabase.storage.from(bucket).info(key);
-        if (error || !data) {
-          return { valid: false, error: error?.message || 'OBJECT_NOT_FOUND' };
-        }
-
-        const actualSize = Number((data as any).size || (data as any).contentLength || 0);
-        const actualMime = ((data as any).mimetype || (data as any).contentType || '').toLowerCase().trim();
-
-        if (actualSize > limitBytes) {
-          return { valid: false, sizeBytes: actualSize, mimeType: actualMime, error: 'FILE_TOO_LARGE' };
-        }
-        if (normalizedExpectedMime && actualMime && actualMime !== normalizedExpectedMime) {
-          return { valid: false, sizeBytes: actualSize, mimeType: actualMime, error: 'INVALID_FILE_TYPE' };
-        }
-
-        return { valid: true, sizeBytes: actualSize, mimeType: actualMime };
-      } catch (err) {
-        return { valid: false, error: `Supabase storage inspection failed: ${err.message}` };
-      }
+    if (normalizedExpectedMime && detected.mimeType !== normalizedExpectedMime) {
+      return {
+        valid: false,
+        sizeBytes: realSize,
+        mimeType: detected.mimeType,
+        error: 'CONTENT_MIME_MISMATCH',
+      };
     }
 
     return {
       valid: true,
-      sizeBytes: limitBytes,
-      mimeType: normalizedExpectedMime,
+      sizeBytes: realSize,
+      mimeType: detected.mimeType,
     };
   }
 }

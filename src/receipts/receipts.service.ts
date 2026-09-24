@@ -207,7 +207,7 @@ export class ReceiptsService {
           bookingId: booking.id,
           paymentRecordId: targetPaymentRecord ? targetPaymentRecord.id : null,
           depositoryBank: bank,
-          transactionRef: dto.transactionRef.trim(),
+          transactionRef: (dto.transactionRef || (dto as any).transactionReference || '').trim(),
           paymentDate: isNaN(paymentDateParsed.getTime()) ? now : paymentDateParsed,
           amount: dto.amount,
           paymentKind: paymentKind,
