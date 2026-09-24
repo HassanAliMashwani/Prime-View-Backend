@@ -540,6 +540,53 @@ export class ReceiptsService {
         }
       }
 
+      // ── Auto-promote installment plot to 'allotted' when fully paid ──────────
+      // Only runs for installment bookings; one_time plots are already 'allotted'
+      // at booking creation time.
+      let plotPromoted = false;
+      let promotedPlotId: string | null = null;
+      let promotedPlotNumber: string | null = null;
+      let promotedBlockId: string | null = null;
+
+      const booking = await tx.booking.findUnique({
+        where: { id: receipt.bookingId },
+        include: { plot: true },
+      });
+
+      if (booking?.paymentType === 'installment' && booking.plot?.status === 'booked') {
+        const allInstallments = await tx.paymentRecord.findMany({
+          where: { bookingId: receipt.bookingId, feeType: 'plot_installment' },
+          select: { status: true },
+        });
+
+        if (allInstallments.length > 0 && allInstallments.every((p) => p.status === 'paid')) {
+          plotPromoted = true;
+          promotedPlotId = booking.plotId;
+          promotedPlotNumber = booking.plot.plotNumber;
+          promotedBlockId = booking.plot.blockId;
+
+          await tx.plot.update({
+            where: { id: booking.plotId },
+            data: { status: 'allotted' },
+          });
+
+          await tx.auditEntry.create({
+            data: {
+              actorId: session.adminId || session.username,
+              actorName: session.fullName || session.username,
+              actorRole: session.role,
+              action: 'PLOT_STATUS_CHANGED',
+              entityType: 'plot',
+              entityId: booking.plotId,
+              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all ${allInstallments.length} installments cleared via receipt ${receiptId} (${slipNumber})`,
+              oldValue: { status: 'booked' },
+              newValue: { status: 'allotted' },
+            },
+          });
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────────
+
       // 3. Create Audit Log
       await tx.auditEntry.create({
         data: {
@@ -558,11 +605,12 @@ export class ReceiptsService {
         },
       });
 
-      return updatedReceipt;
+      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId };
     });
 
+
     await this.realtime.broadcast('receipts', 'RECEIPT_VERIFIED', {
-      receiptId: result.id,
+      receiptId: result.receipt.id,
       customerId: receipt.customerId,
       slipNumber,
     });
@@ -572,10 +620,24 @@ export class ReceiptsService {
       bookingId: receipt.bookingId,
     });
 
+    // If the last installment flipped the plot to 'allotted', broadcast map update
+    if (result.plotPromoted && result.promotedPlotId) {
+      await this.realtime.broadcast(`block:${result.promotedBlockId}`, 'PLOT_STATUS_CHANGED', {
+        plotId: result.promotedPlotId,
+        status: 'allotted',
+      });
+      await this.realtime.broadcast('plots', 'PLOT_STATUS_CHANGED', {
+        plotId: result.promotedPlotId,
+        status: 'allotted',
+      });
+    }
+
     return {
       ok: true,
+      plotPromoted: result.plotPromoted || false,
+      promotedPlotNumber: result.promotedPlotNumber || null,
       receipt: {
-        ...result,
+        ...result.receipt,
         slip: {
           slipNumber,
           securityHash,

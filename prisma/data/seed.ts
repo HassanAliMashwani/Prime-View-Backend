@@ -805,7 +805,7 @@ function generateDrAyeshaPayments(): PaymentRecord[] {
 
   for (let i = 1; i <= 24; i++) {
     // Due on 5th of every month starting from February 2026 (month after booking)
-    const dueDate = new Date(2026, 0 + i, 5);
+    const dueDate = new Date(Date.UTC(2026, 0 + i, 5));
     const dateStr = dueDate.toISOString().split('T')[0];
 
     let status: 'paid' | 'overdue' | 'pending' = 'pending';
@@ -851,7 +851,7 @@ function generateMalikInstallments(): PaymentRecord[] {
 
   for (let i = 1; i <= 12; i++) {
     // Due on 5th of every month starting from March 2026 (month after booking)
-    const dueDate = new Date(2026, 1 + i, 5);
+    const dueDate = new Date(Date.UTC(2026, 1 + i, 5));
     const dateStr = dueDate.toISOString().split('T')[0];
 
     let status: 'paid' | 'overdue' | 'pending' = 'pending';

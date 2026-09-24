@@ -22,7 +22,9 @@ const prisma = new PrismaClient({
 
 async function main() {
   console.log('Seeding database...');
-  const defaultHash = await bcrypt.hash('admin123', 10);
+  const adminHash  = await bcrypt.hash('admin123',  10);
+  const memberHash = await bcrypt.hash('password123', 10);
+  const defaultHash = adminHash; // kept for any other references below
 
   // 1. Create Blocks
   for (const block of initialBlocks) {
@@ -81,7 +83,7 @@ async function main() {
         nokName: customer.nokName,
         nokCnic: customer.nokCnic,
         accountStatus: customer.accountStatus as any,
-        passwordHash: customer.passwordHash ? defaultHash : null,
+        passwordHash: customer.passwordHash ? memberHash : null,
         credentialsPending: customer.credentialsPending || false,
         termsAccepted: customer.termsAccepted || false,
         termsAcceptedAt: customer.termsAcceptedAt ? new Date(customer.termsAcceptedAt) : null,

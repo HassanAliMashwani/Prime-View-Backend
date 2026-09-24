@@ -16,6 +16,7 @@ import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
 import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatus, PlotStatus, Prisma } from '@prisma/client';
 
 import { attachDisplayStatus } from './display-status';
+import { calculateInstallmentDueDates } from '../common/installment-dates';
 
 @Injectable()
 export class PlotsService {
@@ -697,8 +698,10 @@ export class PlotsService {
         const baseInstallmentAmount = Math.floor(remainingBalance / numberOfInstallments);
         const roundingRemainder = remainingBalance - (baseInstallmentAmount * numberOfInstallments);
 
+        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
+
         for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = new Date(now.getFullYear(), now.getMonth() + (i * paidAfterEvery), 5);
+          const dueDate = installmentDueDates[i - 1];
           const currentInstAmount = i === numberOfInstallments
             ? baseInstallmentAmount + roundingRemainder
             : baseInstallmentAmount;

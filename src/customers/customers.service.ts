@@ -26,6 +26,7 @@ import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
 import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
 import { updatePlotStatus } from '../plots/update-plot-status';
+import { calculateInstallmentDueDates } from '../common/installment-dates';
 
 @Injectable()
 export class CustomersService {
@@ -554,8 +555,10 @@ export class CustomersService {
           paymentRecords.push(downRec);
         }
 
+        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
+
         for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = new Date(now.getFullYear(), now.getMonth() + i * paidAfterEvery, 5);
+          const dueDate = installmentDueDates[i - 1];
           const currentInstAmount =
             i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
 
@@ -848,8 +851,10 @@ export class CustomersService {
           paymentRecords.push(downRec);
         }
 
+        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
+
         for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = new Date(now.getFullYear(), now.getMonth() + i * paidAfterEvery, 5);
+          const dueDate = installmentDueDates[i - 1];
           const currentInstAmount =
             i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
 
@@ -1118,8 +1123,10 @@ export class CustomersService {
           paymentRecords.push(downRec);
         }
 
+        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
+
         for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = new Date(now.getFullYear(), now.getMonth() + i * paidAfterEvery, 5);
+          const dueDate = installmentDueDates[i - 1];
           const currentInstAmount =
             i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
 
