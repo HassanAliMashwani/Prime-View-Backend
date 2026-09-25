@@ -972,11 +972,12 @@ export class ReceiptsService {
    * Uses privileged Prisma (DB owner / no RLS session) — same path as login.
    */
   async publicVerifySlip(slipNumber: string) {
+    const cleanSlipNumber = (slipNumber || '').trim().replace(/[.,;:/\\]+$/, '');
     const verifiedData = await this.prisma.withScopedSession(
       { role: 'super_admin' },
       async (tx) => {
         const receipt = await tx.receiptSubmission.findUnique({
-          where: { slipNumber },
+          where: { slipNumber: cleanSlipNumber },
           include: {
             customer: {
               select: { fullName: true, membershipNo: true }
