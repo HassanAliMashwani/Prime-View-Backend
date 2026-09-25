@@ -179,7 +179,7 @@ export class ReceiptsService {
           status: { in: ['active', 'completed'] },
         },
         include: {
-          plot: true,
+          plot: { include: { block: true } },
           payments: true,
         },
       });
@@ -351,7 +351,7 @@ export class ReceiptsService {
         customerName: customer.fullName,
         membershipNo: customer.membershipNo,
         plotNumber: booking.plot.plotNumber,
-        blockName: booking.plot.blockId,
+        blockName: booking.plot.block?.name || booking.plot.blockId,
         paymentType: dto.paymentType,
         installmentNumber: dto.paymentType === 'installment' && targetPaymentRecord ? targetPaymentRecord.installmentNumber : dto.installmentNumber,
       },
@@ -402,7 +402,7 @@ export class ReceiptsService {
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
         where: { id: { in: bookingIds } },
-        include: { plot: true },
+        include: { plot: { include: { block: true } } },
       });
       const bookingMap = new Map(bookings.map((b) => [b.id, b]));
 
@@ -415,21 +415,29 @@ export class ReceiptsService {
       return receipts.map((r) => {
         const booking = bookingMap.get(r.bookingId);
         const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
+        const plotNumber = booking?.plot?.plotNumber || '';
+        const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
 
         return {
           ...r,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
-          customerName: r.customer?.fullName,
-          membershipNo: r.customer?.membershipNo,
+          customerName: r.customer?.fullName || '',
+          membershipNo: r.customer?.membershipNo || '',
           customerPhone: r.customer?.phone,
           customerCnic: r.customer?.cnic,
           customerStrikeCount: r.customer?.strikeCount || 0,
           customerStrikeHistory: r.customer?.strikes || [],
           plotId: booking?.plot?.id,
-          plotNumber: booking?.plot?.plotNumber,
-          blockName: booking?.plot?.blockId,
+          plotNumber,
+          blockName,
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
+          slip: r.slipNumber ? {
+            slipNumber: r.slipNumber,
+            securityHash: r.securityHash,
+            verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
+            verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
+          } : undefined,
         };
       });
     });
@@ -448,6 +456,17 @@ export class ReceiptsService {
     const customerId = session.customerId || session.id;
 
     const enriched = await this.prisma.withScopedSession(session, async (tx) => {
+      const customer = await tx.customer.findUnique({
+        where: { id: customerId },
+        select: {
+          id: true,
+          fullName: true,
+          membershipNo: true,
+          phone: true,
+          cnic: true,
+        },
+      });
+
       const receipts = await tx.receiptSubmission.findMany({
         where: { customerId },
         orderBy: { uploadedAt: 'desc' },
@@ -456,7 +475,7 @@ export class ReceiptsService {
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
         where: { id: { in: bookingIds } },
-        include: { plot: true },
+        include: { plot: { include: { block: true } } },
       });
       const bookingMap = new Map(bookings.map((b) => [b.id, b]));
 
@@ -469,15 +488,27 @@ export class ReceiptsService {
       return receipts.map((r) => {
         const booking = bookingMap.get(r.bookingId);
         const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
+        const plotNumber = booking?.plot?.plotNumber || '';
+        const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
 
         return {
           ...r,
+          customerName: customer?.fullName || (r as any).customerName || '',
+          membershipNo: customer?.membershipNo || (r as any).membershipNo || '',
+          customerPhone: customer?.phone,
+          customerCnic: customer?.cnic,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           plotId: booking?.plot?.id,
-          plotNumber: booking?.plot?.plotNumber,
-          blockName: booking?.plot?.blockId,
+          plotNumber,
+          blockName,
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
+          slip: r.slipNumber ? {
+            slipNumber: r.slipNumber,
+            securityHash: r.securityHash,
+            verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
+            verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
+          } : undefined,
         };
       });
     });
@@ -712,9 +743,11 @@ export class ReceiptsService {
 
       const booking = await tx.booking.findUnique({
         where: { id: receipt.bookingId },
-        include: { plot: true },
+        include: { plot: { include: { block: true } } },
       });
       const plotId = booking?.plotId || booking?.plot?.id || null;
+      const plotNumber = booking?.plot?.plotNumber || null;
+      const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
 
       if (plotPromoted && booking?.plot) {
         promotedPlotId = booking.plot.id;
@@ -755,7 +788,7 @@ export class ReceiptsService {
         },
       });
 
-      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId, plotId };
+      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId, plotId, plotNumber, blockName };
     });
 
 
@@ -790,6 +823,10 @@ export class ReceiptsService {
       promotedPlotNumber: result.promotedPlotNumber || null,
       receipt: {
         ...result.receipt,
+        customerName: receipt.customer?.fullName,
+        membershipNo: receipt.customer?.membershipNo,
+        plotNumber: result.plotNumber,
+        blockName: result.blockName,
         slip: {
           slipNumber,
           securityHash,
@@ -935,57 +972,79 @@ export class ReceiptsService {
    * Uses privileged Prisma (DB owner / no RLS session) — same path as login.
    */
   async publicVerifySlip(slipNumber: string) {
-    const receipt = await this.prisma.receiptSubmission.findUnique({
-      where: { slipNumber },
-      include: {
-        customer: {
-          select: { fullName: true }
-        }
-      },
-    });
+    const verifiedData = await this.prisma.withScopedSession(
+      { role: 'super_admin' },
+      async (tx) => {
+        const receipt = await tx.receiptSubmission.findUnique({
+          where: { slipNumber },
+          include: {
+            customer: {
+              select: { fullName: true, membershipNo: true }
+            }
+          },
+        });
 
-    if (!receipt) {
+        if (!receipt) {
+          return null;
+        }
+
+        // Determine if one_time or installment
+        const booking = receipt.bookingId
+          ? await tx.booking.findUnique({
+              where: { id: receipt.bookingId },
+              select: {
+                paymentType: true,
+                plot: {
+                  select: {
+                    plotNumber: true,
+                    block: { select: { name: true } }
+                  }
+                }
+              },
+            })
+          : null;
+
+        let installmentNumber: number | null = null;
+        let isOneTime = booking?.paymentType === 'one_time';
+
+        if (receipt.paymentRecordId) {
+          const pr = await tx.paymentRecord.findUnique({
+            where: { id: receipt.paymentRecordId },
+            select: { feeType: true, installmentNumber: true },
+          });
+          if (pr) {
+            if (pr.feeType === 'plot_one_time') isOneTime = true;
+            if (pr.installmentNumber !== null && pr.installmentNumber !== undefined) {
+              installmentNumber = pr.installmentNumber;
+            }
+          }
+        }
+
+        const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
+        const paymentDetails = isOneTime
+          ? 'Payment: full upfront / one-time'
+          : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
+
+        return {
+          exists: true,
+          slipNumber: receipt.slipNumber,
+          memberDisplayName,
+          membershipNo: receipt.customer?.membershipNo || null,
+          plotNumber: booking?.plot?.plotNumber || null,
+          blockName: booking?.plot?.block?.name || null,
+          installmentNumber: isOneTime ? null : installmentNumber,
+          paymentDetails,
+          amount: receipt.amount,
+          paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
+          status: receipt.status,
+        };
+      }
+    );
+
+    if (!verifiedData) {
       return { exists: false, status: 'not_found' };
     }
 
-    // Determine if one_time or installment
-    const booking = receipt.bookingId
-      ? await this.prisma.booking.findUnique({
-          where: { id: receipt.bookingId },
-          select: { paymentType: true },
-        })
-      : null;
-
-    let installmentNumber: number | null = null;
-    let isOneTime = booking?.paymentType === 'one_time';
-
-    if (receipt.paymentRecordId) {
-      const pr = await this.prisma.paymentRecord.findUnique({
-        where: { id: receipt.paymentRecordId },
-        select: { feeType: true, installmentNumber: true },
-      });
-      if (pr) {
-        if (pr.feeType === 'plot_one_time') isOneTime = true;
-        if (pr.installmentNumber !== null && pr.installmentNumber !== undefined) {
-          installmentNumber = pr.installmentNumber;
-        }
-      }
-    }
-
-    const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
-    const paymentDetails = isOneTime
-      ? 'Payment: full upfront / one-time'
-      : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
-
-    return {
-      exists: true,
-      slipNumber: receipt.slipNumber,
-      memberDisplayName,
-      installmentNumber: isOneTime ? null : installmentNumber,
-      paymentDetails,
-      amount: receipt.amount,
-      paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
-      status: receipt.status,
-    };
+    return verifiedData;
   }
 }
