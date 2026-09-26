@@ -27,7 +27,11 @@ export class PlotsService {
     private realtime: RealtimeService,
   ) {}
 
-  async findAll(blockId: string, session: any) {
+  async findAll(blockId: string, session: any, search?: string) {
+    if (!blockId && (!search || search.length < 2)) {
+      return [];
+    }
+
     let whereClause: any = {};
     if (blockId) {
       whereClause.blockId = blockId;
@@ -35,9 +39,16 @@ export class PlotsService {
       whereClause.blockId = { in: session.assignedBlocks || [] };
     }
 
+    if (search) {
+      whereClause.plotNumber = { contains: search, mode: 'insensitive' };
+      whereClause.category = { not: 'amenity' };
+      whereClause.status = 'available';
+    }
+
     return this.prisma.withScopedSession(session, async (tx) => {
       const plots = await tx.plot.findMany({
         where: whereClause,
+        take: search ? 20 : undefined,
         include: {
           reservations: true,
           currentOwner: {

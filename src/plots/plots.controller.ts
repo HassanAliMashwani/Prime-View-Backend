@@ -26,8 +26,8 @@ export class PlotsController {
   constructor(private readonly plotsService: PlotsService) {}
 
   @Get()
-  async findAll(@Query('blockId') blockId: string, @CurrentSession() session: any) {
-    return this.plotsService.findAll(blockId, session);
+  async findAll(@Query('blockId') blockId: string, @Query('search') search: string, @CurrentSession() session: any) {
+    return this.plotsService.findAll(blockId, session, search);
   }
 
   @Get(':id')
