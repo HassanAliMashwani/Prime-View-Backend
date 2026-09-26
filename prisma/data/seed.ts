@@ -801,9 +801,15 @@ export const initialBookings: Booking[] = [
 // Helper to generate Dr. Ayesha's 24-month installment schedule
 function generateDrAyeshaPayments(): PaymentRecord[] {
   const records: PaymentRecord[] = [];
-  const installmentAmount = 270833; // 6,500,000 / 24 ≈ 270,833
+  const totalAmount = 6500000;
+  const numInstallments = 24;
+  const baseInstallmentAmount = Math.floor(totalAmount / numInstallments);
+  const remainder = totalAmount - (baseInstallmentAmount * numInstallments);
 
-  for (let i = 1; i <= 24; i++) {
+  for (let i = 1; i <= numInstallments; i++) {
+    const isLast = i === numInstallments;
+    const currentInstallmentAmount = isLast ? baseInstallmentAmount + remainder : baseInstallmentAmount;
+
     // Due on 5th of every month starting from February 2026 (month after booking)
     const dueDate = new Date(Date.UTC(2026, 0 + i, 5));
     const dateStr = dueDate.toISOString().split('T')[0];
@@ -815,7 +821,7 @@ function generateDrAyeshaPayments(): PaymentRecord[] {
 
     if (i <= 7) {
       status = 'paid';
-      paidAmount = installmentAmount;
+      paidAmount = currentInstallmentAmount;
       paidDate = dateStr;
       transactionRef = `TXN-PV-B05-${1000 + i}`;
     } else if (i === 8) {
@@ -834,7 +840,7 @@ function generateDrAyeshaPayments(): PaymentRecord[] {
       feeType: 'plot_installment',
       installmentNumber: i,
       dueDate: dateStr,
-      amount: installmentAmount,
+      amount: currentInstallmentAmount,
       paidAmount,
       paidDate,
       status,

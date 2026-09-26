@@ -706,11 +706,14 @@ export class ReceiptsService {
            const currentPr = await tx.paymentRecord.findUnique({ where: { id: alloc.paymentRecordId } });
            if (currentPr) {
              const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
+             const newStatus = newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid';
              await tx.paymentRecord.update({
                where: { id: currentPr.id },
                data: {
                  paidAmount: newPaidAmount,
-                 status: newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid',
+                 status: newStatus,
+                 paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                 transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
                }
              });
            }
@@ -725,6 +728,8 @@ export class ReceiptsService {
             data: {
               status: 'paid',
               paidAmount: receipt.amount,
+              paidDate: currentPr.paidDate ?? receipt.paymentDate,
+              transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
             },
           });
         }

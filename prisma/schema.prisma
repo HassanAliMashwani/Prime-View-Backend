@@ -286,6 +286,8 @@ model PaymentRecord {
   dueDate           DateTime?
   amount            Decimal       @db.Decimal(14, 2)
   paidAmount        Decimal       @default(0) @db.Decimal(14, 2)
+  paidDate          DateTime?
+  transactionRef    String?
   status            PaymentStatus @default(pending)
   allocations       PaymentAllocation[]
 
