@@ -15,6 +15,7 @@ import { StorageModule } from './storage/storage.module';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { SalesModule } from './sales/sales.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { InventoryModule } from './inventory/inventory.module';
     StorageModule,
     SalesModule,
     InventoryModule,
+    HealthModule,
   ],
   controllers: [],
   providers: [PrismaService],

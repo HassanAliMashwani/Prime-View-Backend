@@ -225,7 +225,7 @@ export class CustomersService {
             }
           }
         },
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdDate: 'desc' },
       });
 
       const formattedCustomers = customers.map(c => {
