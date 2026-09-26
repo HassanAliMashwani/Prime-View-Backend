@@ -11,6 +11,8 @@ export interface SalesHistoryFilters {
   category?: 'all' | PlotCategory;
   paymentType?: 'all' | 'one_time' | 'installment';
   search?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 @Injectable()
@@ -22,7 +24,7 @@ export class SalesService {
   async getSalesHistory(session: any, filters: SalesHistoryFilters) {
     try {
       // 1. Authorization + Scoping
-      let assignedBlocks: string[] | null = null; // null means all blocks
+      let assignedBlocks: string[] | null = null;
 
       if (session.role === 'super_admin') {
         assignedBlocks = null;
@@ -36,162 +38,228 @@ export class SalesService {
         assignedBlocks = session.assignedBlocks || [];
       }
 
-      // If user passed a blockId that is not in their assigned blocks, they get empty
       if (assignedBlocks !== null && filters.blockId) {
         if (!assignedBlocks.includes(filters.blockId)) {
           return this.emptyResult();
         }
       }
 
-      // 2. Base AuditEntry Date Filter
-      const dateFilter = this.getDateFilter(filters);
-      
-      const auditWhere: any = {
-        action: 'PLOT_BOOKED',
-      };
-      
-      if (dateFilter) {
-        auditWhere.timestamp = dateFilter;
+      // 2. Build SQL Conditions
+      const conditions = [`a.action = 'PLOT_BOOKED'`];
+      const params: any[] = [];
+      let paramIdx = 1;
+
+      if (assignedBlocks !== null) {
+        if (assignedBlocks.length === 0) {
+          conditions.push(`1 = 0`);
+        } else {
+          const blockIds = assignedBlocks.map(b => `'${b}'`).join(',');
+          conditions.push(`p."blockId" IN (${blockIds})`);
+        }
+      }
+
+      if (filters.blockId && filters.blockId !== 'all') {
+        conditions.push(`p."blockId" = $${paramIdx++}`);
+        params.push(filters.blockId);
+      }
+
+      if (filters.category && filters.category !== 'all') {
+        conditions.push(`p.category = $${paramIdx++}::"PlotCategory"`);
+        params.push(filters.category);
+      }
+
+      if (filters.paymentType && filters.paymentType !== 'all') {
+        conditions.push(`a."newValue"->>'paymentType' = $${paramIdx++}`);
+        params.push(filters.paymentType);
       }
 
       if (filters.adminId && filters.adminId !== 'all') {
-        auditWhere.actorId = filters.adminId;
+        conditions.push(`a."actorId" = $${paramIdx++}`);
+        params.push(filters.adminId);
       }
 
-      const auditEntries = await this.prisma.withScopedSession(session, tx => tx.auditEntry.findMany({
-        where: auditWhere,
-        orderBy: { timestamp: 'desc' }
-      }));
-
-      if (auditEntries.length === 0) {
-        // Compute "today" stats if empty (today stats still respect assignedBlocks and adminId)
-        return this.emptyResult(await this.computeTodayStats(session, filters.adminId, assignedBlocks));
+      const now = new Date();
+      if (filters.datePreset && filters.datePreset !== 'all') {
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (filters.datePreset === 'today') {
+          conditions.push(`a.timestamp >= $${paramIdx++}`);
+          params.push(startOfToday);
+        } else if (filters.datePreset === 'yesterday') {
+          const startOfYesterday = new Date(startOfToday);
+          startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+          conditions.push(`a.timestamp >= $${paramIdx++} AND a.timestamp < $${paramIdx++}`);
+          params.push(startOfYesterday, startOfToday);
+        } else if (filters.datePreset === 'last_7_days') {
+          const last7 = new Date(startOfToday);
+          last7.setDate(last7.getDate() - 7);
+          conditions.push(`a.timestamp >= $${paramIdx++}`);
+          params.push(last7);
+        } else if (filters.datePreset === 'last_30_days') {
+          const last30 = new Date(startOfToday);
+          last30.setDate(last30.getDate() - 30);
+          conditions.push(`a.timestamp >= $${paramIdx++}`);
+          params.push(last30);
+        } else if (filters.datePreset === 'this_month') {
+          const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          conditions.push(`a.timestamp >= $${paramIdx++}`);
+          params.push(thisMonth);
+        }
+      } else if (filters.dateFrom || filters.dateTo) {
+        if (filters.dateFrom) {
+          conditions.push(`a.timestamp >= $${paramIdx++}`);
+          params.push(new Date(filters.dateFrom));
+        }
+        if (filters.dateTo) {
+          const to = new Date(filters.dateTo);
+          to.setDate(to.getDate() + 1);
+          conditions.push(`a.timestamp < $${paramIdx++}`);
+          params.push(to);
+        }
       }
 
-      // 3. Batch Fetch Related Data
-      const plotIds = [...new Set(auditEntries.map(e => (e.newValue as any)?.plotId).filter(Boolean))];
-      const customerIds = [...new Set(auditEntries.map(e => (e.newValue as any)?.customerId).filter(Boolean))];
+      if (filters.search) {
+        conditions.push(`(
+          p."plotNumber" ILIKE $${paramIdx} OR
+          c."fullName" ILIKE $${paramIdx} OR
+          c."membershipNo" ILIKE $${paramIdx}
+        )`);
+        params.push(`%${filters.search}%`);
+        paramIdx++;
+      }
 
-      const [plots, customers] = await this.prisma.withScopedSession(session, tx => Promise.all([
-        tx.plot.findMany({
-          where: { id: { in: plotIds } },
-          include: { block: true }
-        }),
-        tx.customer.findMany({
-          where: { id: { in: customerIds } }
-        })
-      ]));
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-      const plotMap = new Map(plots.map(p => [p.id, p]));
-      const customerMap = new Map(customers.map(c => [c.id, c]));
+      // 3. Pagination
+      const page = Number(filters.page) || 1;
+      const pageSize = Number(filters.pageSize) || 20;
+      const offset = (page - 1) * pageSize;
 
-      // 4. Assemble and Apply In-Memory Filters
-      let items = [];
+      // 4. Queries
+      const itemsQuery = `
+        SELECT 
+          a.id as "auditId",
+          a.timestamp,
+          a."actorId" as "sellerAdminId",
+          a."actorName" as "sellerAdminName",
+          a."actorRole" as "sellerAdminRole",
+          p.id as "plotId",
+          p."plotNumber",
+          p."blockId",
+          b.name as "blockName",
+          p.category,
+          p.size,
+          (a."newValue"->>'salePrice')::numeric as price,
+          c.id as "customerId",
+          c."fullName" as "customerName",
+          c."membershipNo",
+          a."newValue"->>'paymentType' as "paymentType",
+          a."newValue"->>'bookingId' as "bookingId"
+        FROM "AuditEntry" a
+        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+        JOIN "Block" b ON b.id = p."blockId"
+        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
+        ${whereClause}
+        ORDER BY a.timestamp DESC
+        LIMIT ${pageSize} OFFSET ${offset}
+      `;
 
-      for (const entry of auditEntries) {
-        const payload = entry.newValue as any || {};
-        const plotId = payload.plotId;
-        const customerId = payload.customerId;
+      const kpisQuery = `
+        SELECT 
+          COUNT(*) as "totalPlotsSold",
+          SUM((a."newValue"->>'salePrice')::numeric) as "totalRevenuePkr"
+        FROM "AuditEntry" a
+        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
+        ${whereClause}
+      `;
 
-        const plot = plotMap.get(plotId);
-        const customer = customerMap.get(customerId);
+      const categoryQuery = `
+        SELECT 
+          p.category, 
+          COUNT(*) as count, 
+          SUM((a."newValue"->>'salePrice')::numeric) as "revenuePkr"
+        FROM "AuditEntry" a
+        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
+        ${whereClause}
+        GROUP BY p.category
+      `;
 
-        if (!plot || !customer) continue;
+      const topCloserQuery = `
+        SELECT 
+          a."actorId" as "id",
+          a."actorName" as "name",
+          COUNT(*) as count,
+          SUM((a."newValue"->>'salePrice')::numeric) as "revenuePkr"
+        FROM "AuditEntry" a
+        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
+        ${whereClause}
+        GROUP BY a."actorId", a."actorName"
+        ORDER BY count DESC, "revenuePkr" DESC
+        LIMIT 1
+      `;
 
-        // Block Scoping
-        if (assignedBlocks !== null && !assignedBlocks.includes(plot.blockId)) {
-          continue;
-        }
+      const rawItems = await this.prisma.$queryRawUnsafe<any[]>(itemsQuery, ...params);
+      const rawKpis = await this.prisma.$queryRawUnsafe<any[]>(kpisQuery, ...params);
+      const rawCategory = await this.prisma.$queryRawUnsafe<any[]>(categoryQuery, ...params);
+      const rawTopCloser = await this.prisma.$queryRawUnsafe<any[]>(topCloserQuery, ...params);
+      const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
 
-        // Additional Filters
-        if (filters.blockId && filters.blockId !== 'all' && plot.blockId !== filters.blockId) {
-          continue;
-        }
-        if (filters.category && filters.category !== 'all' && plot.category !== filters.category) {
-          continue;
-        }
-        if (filters.paymentType && filters.paymentType !== 'all' && payload.paymentType !== filters.paymentType) {
-          continue;
-        }
-        
-        if (filters.search) {
-          const s = filters.search.toLowerCase();
-          const matchPlot = plot.plotNumber.toLowerCase().includes(s);
-          const matchCustomer = customer.fullName.toLowerCase().includes(s);
-          const matchMembership = (customer.membershipNo || '').toLowerCase().includes(s);
-          if (!matchPlot && !matchCustomer && !matchMembership) {
-            continue;
-          }
-        }
-
-        const date = new Date(entry.timestamp);
-        
-        items.push({
-          id: payload.bookingId || entry.id, // Fallback to auditId if bookingId missing
-          auditId: entry.id,
-          timestamp: entry.timestamp.toISOString(),
+      // 5. Format Output
+      const items = rawItems.map(row => {
+        const date = new Date(row.timestamp);
+        return {
+          id: row.bookingId || row.auditId,
+          auditId: row.auditId,
+          timestamp: row.timestamp.toISOString(),
           dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           timeStr: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-          plotId: plot.id,
-          plotNumber: plot.plotNumber,
-          blockId: plot.blockId,
-          blockName: plot.block.name,
-          category: plot.category,
-          size: plot.size,
-          price: Number(payload.salePrice || 0),
-          customerId: customer.id,
-          customerName: customer.fullName,
-          membershipNo: customer.membershipNo || '—',
-          paymentType: payload.paymentType,
-          sellerAdminId: entry.actorId,
-          sellerAdminName: entry.actorName,
-          sellerAdminRole: entry.actorRole,
-        });
-      }
+          plotId: row.plotId,
+          plotNumber: row.plotNumber,
+          blockId: row.blockId,
+          blockName: row.blockName,
+          category: row.category,
+          size: row.size,
+          price: Number(row.price || 0),
+          customerId: row.customerId,
+          customerName: row.customerName,
+          membershipNo: row.membershipNo || '—',
+          paymentType: row.paymentType,
+          sellerAdminId: row.sellerAdminId,
+          sellerAdminName: row.sellerAdminName,
+          sellerAdminRole: row.sellerAdminRole,
+        };
+      });
 
-      // Sort just in case order was disrupted, though already desc from DB
-      items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-      // 5. KPIs Computation
-      let totalPlotsSold = 0;
-      let totalRevenuePkr = 0;
+      const kpiRow = rawKpis[0] || {};
       const salesByCategory: Record<string, { count: number; revenuePkr: number }> = {};
-      const adminStats: Record<string, { name: string; count: number; revenuePkr: number }> = {};
-
-      for (const item of items) {
-        totalPlotsSold++;
-        totalRevenuePkr += item.price;
-
-        if (!salesByCategory[item.category]) {
-          salesByCategory[item.category] = { count: 0, revenuePkr: 0 };
-        }
-        salesByCategory[item.category].count++;
-        salesByCategory[item.category].revenuePkr += item.price;
-
-        if (!adminStats[item.sellerAdminId]) {
-          adminStats[item.sellerAdminId] = { name: item.sellerAdminName, count: 0, revenuePkr: 0 };
-        }
-        adminStats[item.sellerAdminId].count++;
-        adminStats[item.sellerAdminId].revenuePkr += item.price;
+      for (const row of rawCategory) {
+        salesByCategory[row.category] = {
+          count: Number(row.count),
+          revenuePkr: Number(row.revenuePkr),
+        };
       }
 
       let topCloser = null;
-      for (const [adminId, stats] of Object.entries(adminStats)) {
-        if (!topCloser) {
-          topCloser = { id: adminId, ...stats };
-        } else if (stats.count > topCloser.count || (stats.count === topCloser.count && stats.revenuePkr > topCloser.revenuePkr)) {
-          topCloser = { id: adminId, ...stats };
-        }
+      if (rawTopCloser.length > 0) {
+        topCloser = {
+          id: rawTopCloser[0].id,
+          name: rawTopCloser[0].name,
+          count: Number(rawTopCloser[0].count),
+          revenuePkr: Number(rawTopCloser[0].revenuePkr)
+        };
       }
-
-      const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
 
       return {
         ok: true,
         items,
+        total: Number(kpiRow.totalPlotsSold || 0),
+        page,
+        pageSize,
         kpis: {
-          totalPlotsSold,
-          totalRevenuePkr,
+          totalPlotsSold: Number(kpiRow.totalPlotsSold || 0),
+          totalRevenuePkr: Number(kpiRow.totalRevenuePkr || 0),
           todayPlotsSold: todayStats.todayPlotsSold,
           todayRevenuePkr: todayStats.todayRevenuePkr,
           topCloser,
@@ -229,98 +297,35 @@ export class SalesService {
     };
   }
 
-  private getDateFilter(filters: SalesHistoryFilters) {
-    const now = new Date();
-    
-    if (filters.datePreset && filters.datePreset !== 'all') {
-      const preset = filters.datePreset;
-      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      
-      if (preset === 'today') {
-        return { gte: startOfToday };
-      } else if (preset === 'yesterday') {
-        const startOfYesterday = new Date(startOfToday);
-        startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-        return { gte: startOfYesterday, lt: startOfToday };
-      } else if (preset === 'last_7_days') {
-        const last7 = new Date(startOfToday);
-        last7.setDate(last7.getDate() - 7);
-        return { gte: last7 };
-      } else if (preset === 'last_30_days') {
-        const last30 = new Date(startOfToday);
-        last30.setDate(last30.getDate() - 30);
-        return { gte: last30 };
-      } else if (preset === 'this_month') {
-        const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        return { gte: thisMonth };
-      }
-    } else if (filters.dateFrom || filters.dateTo) {
-      const range: any = {};
-      if (filters.dateFrom) {
-        range.gte = new Date(filters.dateFrom);
-      }
-      if (filters.dateTo) {
-        const to = new Date(filters.dateTo);
-        to.setDate(to.getDate() + 1); // include the end date fully
-        range.lt = to;
-      }
-      if (Object.keys(range).length > 0) return range;
-    }
-    
-    return undefined;
-  }
-
   private async computeTodayStats(session: any, filterAdminId: string | undefined, assignedBlocks: string[] | null) {
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    const auditWhere: any = {
-      action: 'PLOT_BOOKED',
-      timestamp: { gte: startOfToday }
-    };
-
+    const conditions = [`a.action = 'PLOT_BOOKED'`, `a.timestamp >= CURRENT_DATE`];
     if (filterAdminId && filterAdminId !== 'all') {
-      auditWhere.actorId = filterAdminId;
+      conditions.push(`a."actorId" = '${filterAdminId}'`);
     }
-
-    const todayEntries = await this.prisma.withScopedSession(session, tx => tx.auditEntry.findMany({
-      where: auditWhere
-    }));
-
-    if (todayEntries.length === 0) {
-      return { todayPlotsSold: 0, todayRevenuePkr: 0 };
-    }
-
-    let todayPlotsSold = 0;
-    let todayRevenuePkr = 0;
-
-    if (assignedBlocks === null) {
-      // Super admin, all count
-      for (const e of todayEntries) {
-        todayPlotsSold++;
-        todayRevenuePkr += Number((e.newValue as any)?.salePrice || 0);
-      }
-    } else {
-      // Sub admin, must filter by assigned blocks (requires joining plot)
-      const plotIds = [...new Set(todayEntries.map(e => (e.newValue as any)?.plotId).filter(Boolean))];
-      if (plotIds.length === 0) return { todayPlotsSold: 0, todayRevenuePkr: 0 };
-
-      const plots = await this.prisma.withScopedSession(session, tx => tx.plot.findMany({
-        where: { id: { in: plotIds } },
-        select: { id: true, blockId: true }
-      }));
-      const plotMap = new Map(plots.map(p => [p.id, p.blockId]));
-
-      for (const e of todayEntries) {
-        const plotId = (e.newValue as any)?.plotId;
-        const blockId = plotMap.get(plotId);
-        if (blockId && assignedBlocks.includes(blockId)) {
-          todayPlotsSold++;
-          todayRevenuePkr += Number((e.newValue as any)?.salePrice || 0);
-        }
+    if (assignedBlocks !== null) {
+      if (assignedBlocks.length === 0) {
+        conditions.push(`1 = 0`);
+      } else {
+        const blockIds = assignedBlocks.map(b => `'${b}'`).join(',');
+        conditions.push(`p."blockId" IN (${blockIds})`);
       }
     }
-
-    return { todayPlotsSold, todayRevenuePkr };
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+    const query = `
+      SELECT 
+        COUNT(*) as "todayPlotsSold",
+        SUM((a."newValue"->>'salePrice')::numeric) as "todayRevenuePkr"
+      FROM "AuditEntry" a
+      JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+      ${whereClause}
+    `;
+    const res = await this.prisma.$queryRawUnsafe<any[]>(query);
+    if (res.length > 0) {
+      return {
+        todayPlotsSold: Number(res[0].todayPlotsSold || 0),
+        todayRevenuePkr: Number(res[0].todayRevenuePkr || 0)
+      };
+    }
+    return { todayPlotsSold: 0, todayRevenuePkr: 0 };
   }
 }

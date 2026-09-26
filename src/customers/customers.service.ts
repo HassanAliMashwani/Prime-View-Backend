@@ -161,7 +161,7 @@ export class CustomersService {
     };
   }
 
-  async findAll(session: any) {
+  async findAll(session: any, query: { page: number, pageSize: number, search?: string, status?: string }) {
     let whereClause: any = {};
     if (session.role !== 'super_admin') {
       whereClause = {
@@ -175,30 +175,98 @@ export class CustomersService {
       };
     }
 
-    const customers = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.customer.findMany({
-        where: whereClause,
-        include: {
-          bookings: {
-            include: {
-              plot: true,
-            },
-          },
-          documents: true,
-          strikes: true,
-        },
-      });
-    });
-
-    if (session.role !== 'super_admin') {
-      customers.forEach((customer) => {
-        customer.bookings = customer.bookings.filter((b) =>
-          session.assignedBlocks.includes(b.plot.blockId),
-        );
-      });
+    if (query.status && query.status !== 'all') {
+      whereClause.registrationStatus = query.status;
     }
 
-    return customers;
+    if (query.search) {
+      const s = query.search;
+      whereClause.OR = [
+        { fullName: { contains: s, mode: 'insensitive' } },
+        { membershipNo: { contains: s, mode: 'insensitive' } },
+        { cnic: { contains: s, mode: 'insensitive' } },
+        { phone: { contains: s, mode: 'insensitive' } },
+        { email: { contains: s, mode: 'insensitive' } },
+      ];
+    }
+
+    const { page, pageSize } = query;
+    const skip = (page - 1) * pageSize;
+
+    return this.prisma.withScopedSession(session, async (tx) => {
+      const total = await tx.customer.count({ where: whereClause });
+
+      const customers = await tx.customer.findMany({
+        where: whereClause,
+        skip,
+        take: pageSize,
+        select: {
+          id: true,
+          membershipNo: true,
+          fullName: true,
+          phone: true,
+          cnic: true,
+          email: true,
+          accountStatus: true,
+          registrationStatus: true,
+          credentialsPending: true,
+          _count: {
+            select: { strikes: true }
+          },
+          bookings: {
+            select: {
+              plot: {
+                select: { id: true, blockId: true, plotNumber: true, price: true }
+              },
+              payments: {
+                where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment'] } },
+                select: { paidAmount: true }
+              }
+            }
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      const formattedCustomers = customers.map(c => {
+        let plotCount = 0;
+        let totalPaid = 0;
+        let outstandingTotal = 0;
+
+        c.bookings.forEach(b => {
+          if (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId))) {
+            plotCount++;
+            const price = Number(b.plot.price || 0);
+            const paid = b.payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
+            totalPaid += paid;
+            outstandingTotal += Math.max(0, price - paid);
+          }
+        });
+
+        return {
+          id: c.id,
+          membershipNo: c.membershipNo,
+          fullName: c.fullName,
+          phone: c.phone,
+          cnic: c.cnic,
+          email: c.email,
+          accountStatus: c.accountStatus,
+          registrationStatus: c.registrationStatus,
+          credentialsPending: c.credentialsPending,
+          strikeCount: c._count.strikes,
+          plotCount,
+          totalPaid,
+          outstandingTotal
+        };
+      });
+
+      return {
+        customers: formattedCustomers,
+        total,
+        page,
+        pageSize
+      };
+    });
   }
 
   async findOne(id: string, session: any) {

@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -31,8 +32,19 @@ export class CustomersController {
 
   @Get()
   @RequirePermission('can_view_customers')
-  async findAll(@CurrentSession() session: any) {
-    return this.customersService.findAll(session);
+  async findAll(
+    @CurrentSession() session: any,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.customersService.findAll(session, {
+      page: parseInt(page) || 1,
+      pageSize: parseInt(pageSize) || 20,
+      search,
+      status,
+    });
   }
 
   /**
