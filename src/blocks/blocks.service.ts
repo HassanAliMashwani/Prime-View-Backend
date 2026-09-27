@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -7,60 +8,71 @@ export class BlocksService {
 
   async findAll(session: any) {
     const role = session.role;
-    const assignedBlocks = session.assignedBlocks || [];
-    const where = role === 'super_admin' ? {} : { id: { in: assignedBlocks } };
+    const assignedBlocks: string[] = session.assignedBlocks || [];
+
+    if (role !== 'super_admin' && assignedBlocks.length === 0) {
+      return [];
+    }
+
+    const whereClause =
+      role === 'super_admin'
+        ? Prisma.empty
+        : Prisma.sql`WHERE b.id IN (${Prisma.join(assignedBlocks)})`;
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      const blocks = await tx.block.findMany({
-        where,
-        include: {
-          plots: {
-            select: {
-              id: true,
-              status: true,
-              category: true,
-              amenityName: true,
-              isAdjustment: true,
-            },
-          },
-        },
-        orderBy: { id: 'asc' },
-      });
+      const blocks = await tx.$queryRaw<
+        Array<{
+          id: string;
+          name: string;
+          description: string | null;
+          totalPlots: number;
+          totalCount: number;
+          availableCount: number;
+          reservedCount: number;
+          bookedCount: number;
+          allottedCount: number;
+          amenityCount: number;
+          disputedCount: number;
+          amenities: string[] | null;
+        }>
+      >`
+        SELECT 
+          b.id,
+          b.name,
+          b.description,
+          COUNT(p.id)::int as "totalPlots",
+          COUNT(p.id)::int as "totalCount",
+          COUNT(p.id) FILTER (WHERE p.category != 'amenity' AND p.status = 'available' AND p."isAdjustment" = false)::int as "availableCount",
+          COUNT(p.id) FILTER (WHERE p.category != 'amenity' AND p.status = 'reserved' AND p."isAdjustment" = false)::int as "reservedCount",
+          COUNT(p.id) FILTER (WHERE p.category != 'amenity' AND p.status = 'booked' AND p."isAdjustment" = false)::int as "bookedCount",
+          COUNT(p.id) FILTER (WHERE p.category != 'amenity' AND p.status = 'allotted' AND p."isAdjustment" = false)::int as "allottedCount",
+          COUNT(p.id) FILTER (WHERE p.category = 'amenity')::int as "amenityCount",
+          COUNT(p.id) FILTER (WHERE p."isAdjustment" = true)::int as "disputedCount",
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT p."amenityName"), NULL) as amenities
+        FROM "Block" b
+        LEFT JOIN "Plot" p ON p."blockId" = b.id
+        ${whereClause}
+        GROUP BY b.id, b.name, b.description
+        ORDER BY b.id ASC
+      `;
 
-      return blocks.map((block) => {
-        const sellablePlots = block.plots.filter((p) => p.category !== 'amenity');
-        const availableCount = sellablePlots.filter((p) => p.status === 'available').length;
-        const reservedCount = sellablePlots.filter((p) => p.status === 'reserved').length;
-        const bookedCount = sellablePlots.filter((p) => p.status === 'booked').length;
-        const allottedCount = sellablePlots.filter((p) => p.status === 'allotted').length;
-        const amenityPlots = block.plots.filter((p) => p.category === 'amenity');
-        const amenityCount = amenityPlots.length;
-        const totalCount = sellablePlots.length;
-        const disputedCount = block.plots.filter((p) => p.isAdjustment).length;
-
-        const extractedAmenities = Array.from(
-          new Set(
-            amenityPlots
-              .map((p) => p.amenityName)
-              .filter((name): name is string => Boolean(name)),
-          ),
-        );
-
-        return {
-          id: block.id,
-          name: block.name,
-          description: block.description,
-          totalPlots: block.totalPlots, // descriptive capacity preserved
-          totalCount, // live aggregate of actual seeded sellable plots
-          availableCount,
-          reservedCount,
-          bookedCount,
-          allottedCount,
-          amenityCount,
-          disputedCount,
-          amenities: extractedAmenities.length > 0 ? extractedAmenities : ['Central Park', 'Community Mosque'],
-        };
-      });
+      return blocks.map((block) => ({
+        id: block.id,
+        name: block.name,
+        description: block.description,
+        totalPlots: block.totalPlots,
+        totalCount: block.totalCount,
+        availableCount: block.availableCount,
+        reservedCount: block.reservedCount,
+        bookedCount: block.bookedCount,
+        allottedCount: block.allottedCount,
+        amenityCount: block.amenityCount,
+        disputedCount: block.disputedCount,
+        amenities:
+          block.amenities && block.amenities.length > 0
+            ? block.amenities
+            : ['Central Park', 'Community Mosque'],
+      }));
     });
   }
 }
