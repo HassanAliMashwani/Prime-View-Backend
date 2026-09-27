@@ -134,7 +134,7 @@ export class SalesService {
       const pageSize = Number(filters.pageSize) || 20;
       const offset = (page - 1) * pageSize;
 
-      // 4. Queries
+      // 4. Single Combined Query
       const itemsQuery = `
         SELECT 
           a.id as "auditId",
@@ -153,7 +153,8 @@ export class SalesService {
           c."fullName" as "customerName",
           c."membershipNo",
           a."newValue"->>'paymentType' as "paymentType",
-          a."newValue"->>'bookingId' as "bookingId"
+          a."newValue"->>'bookingId' as "bookingId",
+          COUNT(*) OVER() as "totalCount"
         FROM "AuditEntry" a
         JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
         JOIN "Block" b ON b.id = p."blockId"
@@ -163,48 +164,8 @@ export class SalesService {
         LIMIT ${pageSize} OFFSET ${offset}
       `;
 
-      const kpisQuery = `
-        SELECT 
-          COUNT(*) as "totalPlotsSold",
-          SUM((a."newValue"->>'salePrice')::numeric) as "totalRevenuePkr"
-        FROM "AuditEntry" a
-        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
-        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
-        ${whereClause}
-      `;
-
-      const categoryQuery = `
-        SELECT 
-          p.category, 
-          COUNT(*) as count, 
-          SUM((a."newValue"->>'salePrice')::numeric) as "revenuePkr"
-        FROM "AuditEntry" a
-        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
-        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
-        ${whereClause}
-        GROUP BY p.category
-      `;
-
-      const topCloserQuery = `
-        SELECT 
-          a."actorId" as "id",
-          a."actorName" as "name",
-          COUNT(*) as count,
-          SUM((a."newValue"->>'salePrice')::numeric) as "revenuePkr"
-        FROM "AuditEntry" a
-        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
-        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
-        ${whereClause}
-        GROUP BY a."actorId", a."actorName"
-        ORDER BY count DESC, "revenuePkr" DESC
-        LIMIT 1
-      `;
-
       const rawItems = await this.prisma.$queryRawUnsafe<any[]>(itemsQuery, ...params);
-      const rawKpis = await this.prisma.$queryRawUnsafe<any[]>(kpisQuery, ...params);
-      const rawCategory = await this.prisma.$queryRawUnsafe<any[]>(categoryQuery, ...params);
-      const rawTopCloser = await this.prisma.$queryRawUnsafe<any[]>(topCloserQuery, ...params);
-      const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
+      const total = rawItems.length > 0 ? Number(rawItems[0].totalCount || 0) : 0;
 
       // 5. Format Output
       const items = rawItems.map(row => {
@@ -232,38 +193,19 @@ export class SalesService {
         };
       });
 
-      const kpiRow = rawKpis[0] || {};
-      const salesByCategory: Record<string, { count: number; revenuePkr: number }> = {};
-      for (const row of rawCategory) {
-        salesByCategory[row.category] = {
-          count: Number(row.count),
-          revenuePkr: Number(row.revenuePkr),
-        };
-      }
-
-      let topCloser = null;
-      if (rawTopCloser.length > 0) {
-        topCloser = {
-          id: rawTopCloser[0].id,
-          name: rawTopCloser[0].name,
-          count: Number(rawTopCloser[0].count),
-          revenuePkr: Number(rawTopCloser[0].revenuePkr)
-        };
-      }
-
       return {
         ok: true,
         items,
-        total: Number(kpiRow.totalPlotsSold || 0),
+        total,
         page,
         pageSize,
         kpis: {
-          totalPlotsSold: Number(kpiRow.totalPlotsSold || 0),
-          totalRevenuePkr: Number(kpiRow.totalRevenuePkr || 0),
-          todayPlotsSold: todayStats.todayPlotsSold,
-          todayRevenuePkr: todayStats.todayRevenuePkr,
-          topCloser,
-          salesByCategory,
+          totalPlotsSold: total,
+          totalRevenuePkr: 0,
+          todayPlotsSold: 0,
+          todayRevenuePkr: 0,
+          topCloser: null,
+          salesByCategory: {},
         }
       };
 

@@ -362,7 +362,7 @@ export class ReceiptsService {
    * 2. GET /receipts
    * Admin queue of receipts, block-scoped for sub-admins, enriched with strikes.
    */
-  async getAdminReceipts(statusFilter: string | undefined, session: any) {
+  async getAdminReceipts(statusFilter: string | undefined, session: any, page: number = 1, pageSize: number = 20) {
     const isSuper = session.role === 'super_admin';
     const hasAuth = Boolean(session.permissions?.can_verify_receipts);
 
@@ -378,9 +378,14 @@ export class ReceiptsService {
       where.status = statusFilter as ReceiptStatus;
     }
 
+    const skip = Math.max(0, (page - 1) * pageSize);
+    const take = pageSize;
+
     const enriched = await this.prisma.withScopedSession(session, async (tx) => {
       const receipts = await tx.receiptSubmission.findMany({
         where,
+        skip,
+        take,
         include: {
           customer: {
             select: {

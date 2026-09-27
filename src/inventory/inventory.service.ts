@@ -26,10 +26,11 @@ export class InventoryService {
       if (blockIds.length === 0) return [];
 
       if (!from || !to) {
-        // Snapshot Mode
-        const plots = await tx.plot.findMany({
+        // Snapshot Mode: One grouped query by blockId and status without loading every plot into memory
+        const grouped = await tx.plot.groupBy({
+          by: ['blockId', 'status'],
           where: { blockId: { in: blockIds } },
-          select: { blockId: true, status: true },
+          _count: { id: true },
         });
 
         const statsByBlock = new Map();
@@ -45,14 +46,15 @@ export class InventoryService {
           });
         }
 
-        for (const p of plots) {
-          const st = statsByBlock.get(p.blockId);
+        for (const row of grouped) {
+          const st = statsByBlock.get(row.blockId);
           if (!st) continue;
-          if (p.status === 'booked') st.booked++;
-          else if (p.status === 'allotted') st.allotted++;
-          else if (p.status === 'reserved') st.reserved++;
-          else if (p.status === 'available') st.available++;
-          else if (p.status === 'disputed') st.disputedTotal++;
+          const count = row._count.id;
+          if (row.status === 'booked') st.booked += count;
+          else if (row.status === 'allotted') st.allotted += count;
+          else if (row.status === 'reserved') st.reserved += count;
+          else if (row.status === 'available') st.available += count;
+          else if (row.status === 'disputed') st.disputedTotal += count;
         }
 
         return Array.from(statsByBlock.values());

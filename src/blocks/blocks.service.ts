@@ -32,6 +32,7 @@ export class BlocksService {
         const availableCount = sellablePlots.filter((p) => p.status === 'available').length;
         const reservedCount = sellablePlots.filter((p) => p.status === 'reserved').length;
         const bookedCount = sellablePlots.filter((p) => p.status === 'booked').length;
+        const allottedCount = sellablePlots.filter((p) => p.status === 'allotted').length;
         const amenityPlots = block.plots.filter((p) => p.category === 'amenity');
         const amenityCount = amenityPlots.length;
         const totalCount = sellablePlots.length;
@@ -54,6 +55,7 @@ export class BlocksService {
           availableCount,
           reservedCount,
           bookedCount,
+          allottedCount,
           amenityCount,
           disputedCount,
           amenities: extractedAmenities.length > 0 ? extractedAmenities : ['Central Park', 'Community Mosque'],

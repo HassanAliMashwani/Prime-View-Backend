@@ -37,9 +37,16 @@ export class ReceiptsController {
   @Get()
   async getAdminReceipts(
     @Query('status') status: string,
+    @Query('page') page: string,
+    @Query('pageSize') pageSize: string,
     @CurrentSession() session: any,
   ) {
-    return this.receiptsService.getAdminReceipts(status, session);
+    return this.receiptsService.getAdminReceipts(
+      status,
+      session,
+      page ? Number(page) : 1,
+      pageSize ? Number(pageSize) : 20,
+    );
   }
 
   @Get('me')
