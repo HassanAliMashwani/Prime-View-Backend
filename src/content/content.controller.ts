@@ -16,6 +16,7 @@ import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
 import { CurrentSession } from '../common/decorators/current-session.decorator';
 import { CreateContentBlockDto } from './dto/create-content-block.dto';
 import { SaveContentBlockDto } from './dto/save-content-block.dto';
+import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('content')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -23,6 +24,7 @@ export class ContentController {
   constructor(private readonly contentService: ContentService) {}
 
   @Get()
+  @Public()
   async getContentBlocks(
     @Query('section') section?: 'plans' | 'events',
     @CurrentSession() session?: any,

@@ -32,8 +32,14 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useBodyParser('json', { limit: '15mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '15mb' });
+  const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'https://prime-view-livid.vercel.app',
+    'http://localhost:3000',
+  ].filter(Boolean) as string[];
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: allowedOrigins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
