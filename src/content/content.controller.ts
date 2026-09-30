@@ -32,11 +32,6 @@ export class ContentController {
     return this.contentService.getContentBlocks(section, session);
   }
 
-  @Get('resolve-image')
-  @Public()
-  async resolveImage(@Query('url') url?: string) {
-    return this.contentService.resolveImage(url);
-  }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)

@@ -71,166 +71,17 @@ export class ContentService {
 
     return { ok: true, blocks: enriched };
   }
-  /**
-   * Resolve an image URL:
-   * - If it already starts with https://images.unsplash.com/ or https://res.cloudinary.com/,
-   *   or ends in .jpg, .jpeg, .png, .webp, or .gif, keep it.
-   * - For Unsplash photo pages: extract photo ID (last segment) and try 3 methods in order with a normal browser User-Agent:
-   *   1. Read og:image from the photo page when response is HTML and that tag exists.
-   *   2. Read urls.regular from https://unsplash.com/napi/photos/:id
-   *   3. Follow https://unsplash.com/photos/:id/download?force=true and keep final address when host is images.unsplash.com.
-   * - A direct https picture, including one with no .jpg ending, stays as-is when response type starts with image/.
-   * - Do not return "this link is a page" until all three fail.
-   */
-  async resolveImage(url?: string): Promise<{ ok: boolean; directUrl?: string; isPage?: boolean; error?: string }> {
-    if (!url || typeof url !== 'string') {
-      return { ok: false, isPage: false, error: 'URL required' };
-    }
-    const trimmed = url.trim();
-
-    // 1. Direct image checks:
-    if (
-      trimmed.startsWith('https://images.unsplash.com/') ||
-      trimmed.startsWith('https://res.cloudinary.com/') ||
-      trimmed.startsWith('/') ||
-      /\.(jpe?g|png|webp|gif)(\?.*)?$/i.test(trimmed)
-    ) {
-      return { ok: true, directUrl: trimmed };
-    }
-
-    const browserUA =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
-
-    // 2. Unsplash photo page: https://unsplash.com/photos/...
-    if (/^https?:\/\/(?:www\.)?unsplash\.com\/photos\//i.test(trimmed)) {
-      let photoId = '';
-      try {
-        const parsed = new URL(trimmed);
-        const segments = parsed.pathname.split('/').filter(Boolean);
-        const lastSeg = segments[segments.length - 1] || '';
-        photoId = lastSeg.includes('-') ? (lastSeg.split('-').pop() || '') : lastSeg;
-      } catch {
-        const match = trimmed.match(/\/photos\/([a-zA-Z0-9_-]+)/);
-        if (match) {
-          const seg = match[1];
-          photoId = seg.includes('-') ? (seg.split('-').pop() || '') : seg;
-        }
-      }
-
-      // Method 1: Read og:image from the photo page when response is HTML and that tag exists
-      try {
-        const res1 = await fetch(trimmed, {
-          headers: {
-            'User-Agent': browserUA,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          },
-        });
-        const contentType = (res1.headers.get('content-type') || '').toLowerCase();
-        if (contentType.includes('text/html')) {
-          const html = await res1.text();
-          const match =
-            html.match(/<meta\s+[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-            html.match(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
-          if (match && match[1]) {
-            const ogImage = match[1].replace(/&amp;/g, '&');
-            return { ok: true, directUrl: ogImage };
-          }
-        } else if (contentType.startsWith('image/')) {
-          return { ok: true, directUrl: trimmed };
-        }
-      } catch {}
-
-      // Method 2: Read urls.regular from https://unsplash.com/napi/photos/:id
-      if (photoId) {
-        try {
-          const res2 = await fetch(`https://unsplash.com/napi/photos/${photoId}`, {
-            headers: {
-              'User-Agent': browserUA,
-              'Accept': 'application/json',
-            },
-          });
-          if (res2.ok) {
-            const data = await res2.json();
-            if (data?.urls?.regular) {
-              return { ok: true, directUrl: data.urls.regular };
-            }
-          }
-        } catch {}
-      }
-
-      // Method 3: Follow https://unsplash.com/photos/:id/download?force=true and keep the final address when host is images.unsplash.com
-      if (photoId) {
-        try {
-          const res3 = await fetch(`https://unsplash.com/photos/${photoId}/download?force=true`, {
-            headers: {
-              'User-Agent': browserUA,
-            },
-            redirect: 'follow',
-          });
-          if (res3.url) {
-            try {
-              const finalUrl = new URL(res3.url);
-              if (finalUrl.hostname === 'images.unsplash.com') {
-                return { ok: true, directUrl: res3.url };
-              }
-            } catch {}
-          }
-        } catch {}
-      }
-
-      // Do not return "this link is a page" until all three fail
-      return { ok: false, isPage: true, error: 'This link is a page, not a picture.' };
-    }
-
-    // 3. A direct https picture, including one with no .jpg ending, stays as-is when the response type starts with image/
-    if (/^https?:\/\//i.test(trimmed)) {
-      try {
-        const headRes = await fetch(trimmed, {
-          method: 'HEAD',
-          headers: { 'User-Agent': browserUA },
-        });
-        const ctype = (headRes.headers.get('content-type') || '').toLowerCase();
-        if (ctype.startsWith('image/')) {
-          return { ok: true, directUrl: trimmed };
-        }
-        if (!headRes.ok) {
-          const getRes = await fetch(trimmed, {
-            method: 'GET',
-            headers: { 'User-Agent': browserUA, Range: 'bytes=0-0' },
-          });
-          const getCtype = (getRes.headers.get('content-type') || '').toLowerCase();
-          if (getCtype.startsWith('image/')) {
-            return { ok: true, directUrl: trimmed };
-          }
-        }
-      } catch {}
-    }
-
-    return { ok: false, isPage: true, error: 'This link is a page, not a picture.' };
-  }
-
-  async sanitizeMetadataImages(metadata?: any) {
+  sanitizeMetadataImages(metadata?: any) {
     if (!metadata || typeof metadata !== 'object') return metadata;
     const next = { ...metadata };
-    if (typeof next.imageUrl === 'string' && next.imageUrl.trim()) {
-      const res = await this.resolveImage(next.imageUrl);
-      if (res.ok && res.directUrl) {
-        next.imageUrl = res.directUrl;
-      }
+    if (typeof next.imageUrl === 'string') {
+      next.imageUrl = next.imageUrl.trim() || undefined;
     }
     if (Array.isArray(next.galleryImages)) {
-      const resolvedList: string[] = [];
-      for (const item of next.galleryImages) {
-        if (typeof item === 'string' && item.trim()) {
-          const res = await this.resolveImage(item);
-          if (res.ok && res.directUrl) {
-            resolvedList.push(res.directUrl);
-          } else if (!res.isPage) {
-            resolvedList.push(item.trim());
-          }
-        }
-      }
-      next.galleryImages = resolvedList.slice(0, 9);
+      next.galleryImages = next.galleryImages
+        .filter((item: any) => typeof item === 'string' && item.trim())
+        .map((item: string) => item.trim())
+        .slice(0, 9);
     }
     return next;
   }
