@@ -73,6 +73,82 @@ export class ContentService {
   }
 
   /**
+   * Resolve an image URL:
+   * - If it already starts with https://images.unsplash.com/ or https://res.cloudinary.com/,
+   *   or ends in .jpg, .jpeg, .png, .webp, or .gif, keep it.
+   * - If it is an Unsplash photo page, https://unsplash.com/photos/..., read that page's og:image and use that address.
+   * - If it cannot be resolved, return isPage: true with error message.
+   */
+  async resolveImage(url?: string): Promise<{ ok: boolean; directUrl?: string; isPage?: boolean; error?: string }> {
+    if (!url || typeof url !== 'string') {
+      return { ok: false, isPage: false, error: 'URL required' };
+    }
+    const trimmed = url.trim();
+
+    // Direct image checks:
+    if (
+      trimmed.startsWith('https://images.unsplash.com/') ||
+      trimmed.startsWith('https://res.cloudinary.com/') ||
+      trimmed.startsWith('/') ||
+      /\.(jpe?g|png|webp|gif)(\?.*)?$/i.test(trimmed)
+    ) {
+      return { ok: true, directUrl: trimmed };
+    }
+
+    // Unsplash photo page: https://unsplash.com/photos/...
+    if (/^https?:\/\/(?:www\.)?unsplash\.com\/photos\//i.test(trimmed)) {
+      try {
+        const res = await fetch(trimmed, {
+          headers: {
+            'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+        });
+        if (res.ok) {
+          const html = await res.text();
+          const match =
+            html.match(/<meta\s+[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+            html.match(/<meta\s+[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+          if (match && match[1]) {
+            const ogImage = match[1].replace(/&amp;/g, '&');
+            return { ok: true, directUrl: ogImage };
+          }
+        }
+      } catch {
+        // Fall through to cannot be resolved
+      }
+    }
+
+    return { ok: false, isPage: true, error: 'This link is a page, not a picture.' };
+  }
+
+  async sanitizeMetadataImages(metadata?: any) {
+    if (!metadata || typeof metadata !== 'object') return metadata;
+    const next = { ...metadata };
+    if (typeof next.imageUrl === 'string' && next.imageUrl.trim()) {
+      const res = await this.resolveImage(next.imageUrl);
+      if (res.ok && res.directUrl) {
+        next.imageUrl = res.directUrl;
+      }
+    }
+    if (Array.isArray(next.galleryImages)) {
+      const resolvedList: string[] = [];
+      for (const item of next.galleryImages) {
+        if (typeof item === 'string' && item.trim()) {
+          const res = await this.resolveImage(item);
+          if (res.ok && res.directUrl) {
+            resolvedList.push(res.directUrl);
+          } else if (!res.isPage) {
+            resolvedList.push(item.trim());
+          }
+        }
+      }
+      next.galleryImages = resolvedList.slice(0, 9);
+    }
+    return next;
+  }
+
+  /**
    * 2. POST /content/:id/lock or /content/blocks/:id/lock
    * Acquire a 30-minute soft edit lock on a CMS content block.
    */
@@ -247,11 +323,11 @@ export class ContentService {
     }
 
     const existingMetadata = (block.metadata as Record<string, any>) || {};
-    const updatedMetadata = {
+    const updatedMetadata = await this.sanitizeMetadataImages({
       ...existingMetadata,
       ...(dto.category ? { category: dto.category.trim() } : {}),
       ...(dto.metadata || {}),
-    };
+    });
 
     const oldSnapshot = {
       title: block.title,
@@ -332,10 +408,10 @@ export class ContentService {
     const id = `${dto.section === 'plans' ? 'plan' : 'event'}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const now = new Date();
 
-    const metadata = {
+    const metadata = await this.sanitizeMetadataImages({
       category: dto.category?.trim() || (dto.section === 'plans' ? 'residential' : 'ceremony'),
       ...(dto.metadata || {}),
-    };
+    });
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       const created = await tx.contentBlock.create({
