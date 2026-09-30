@@ -11,6 +11,48 @@ import { CreateContentBlockDto } from './dto/create-content-block.dto';
 import { SaveContentBlockDto } from './dto/save-content-block.dto';
 import { ContentSection } from '@prisma/client';
 
+function normalizeImagePath(raw: string | null | undefined): string {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  if (!str) return '';
+
+  if (/^https?:\/\//i.test(str)) {
+    return str;
+  }
+
+  str = str.replace(/\\/g, '/');
+
+  const publicIndex = str.toLowerCase().indexOf('/public/');
+  if (publicIndex !== -1) {
+    str = str.substring(publicIndex + '/public'.length);
+  } else if (str.toLowerCase().startsWith('public/')) {
+    str = str.substring('public'.length);
+  }
+
+  str = str.replace(/^[a-zA-Z]:/, '');
+
+  if (/card\s*6/i.test(str) && /plan/i.test(str)) {
+    return '/new assests/our plan assests/card 6.png';
+  }
+
+  if (!str.startsWith('/')) {
+    str = '/' + str;
+  }
+
+  return str;
+}
+
+const EVENT1_DEFAULT_GALLERY = [
+  '/new assests/Events and media/event1/WhatsApp Image 2026-09-06 at 3.10.12 PM.jpeg',
+  '/new assests/Events and media/event1/QAS07025.JPG_202609031129.jpeg',
+  '/new assests/Events and media/event1/QAS07031.JPG_2K_202609031134.jpeg',
+  '/new assests/Events and media/event1/QAS07033.JPG_2K_202609031135.jpeg',
+  '/new assests/Events and media/event1/QAS07562_improved.png',
+  '/new assests/Events and media/event1/QAS07590_glow.png',
+  '/new assests/Events and media/event1/QAS07600.png_2K_202609031145.jpeg',
+  '/new assests/Events and media/event1/QAS07627.JPG_202609031125.jpeg',
+];
+
 @Injectable()
 export class ContentService {
   private readonly lockExpiryMs = 30 * 60 * 1000; // 30 minutes
@@ -60,8 +102,40 @@ export class ContentService {
           }
         }
 
+        let metadata = block.metadata;
+        if (metadata && typeof metadata === 'object') {
+          const m = { ...(metadata as Record<string, any>) };
+          if (block.id === 'plan-02-kanal') {
+            if (!m.imageUrl || m.imageUrl.includes('sample.jpg') || m.imageUrl.includes('cloudinary')) {
+              m.imageUrl = '/new assests/our plan assests/card 6.png';
+            } else {
+              m.imageUrl = normalizeImagePath(m.imageUrl);
+            }
+          } else if (block.id === 'event-pre-launch-ceremony' || block.id.includes('pre-launch')) {
+            if (!m.imageUrl || m.imageUrl.includes('sample.jpg') || m.imageUrl.includes('QAS07562')) {
+              m.imageUrl = '/new assests/Events and media/event1/QAS07033.JPG_2K_202609031135.jpeg';
+            } else {
+              m.imageUrl = normalizeImagePath(m.imageUrl);
+            }
+            if (!Array.isArray(m.galleryImages) || m.galleryImages.length === 0 || (m.galleryImages.length === 1 && m.galleryImages[0].includes('sample'))) {
+              m.galleryImages = EVENT1_DEFAULT_GALLERY;
+            } else {
+              m.galleryImages = m.galleryImages.map((g: string) => normalizeImagePath(g));
+            }
+          } else {
+            if (typeof m.imageUrl === 'string') {
+              m.imageUrl = normalizeImagePath(m.imageUrl);
+            }
+            if (Array.isArray(m.galleryImages)) {
+              m.galleryImages = m.galleryImages.map((g: string) => normalizeImagePath(g));
+            }
+          }
+          metadata = m;
+        }
+
         return {
           ...block,
+          metadata,
           lockedBy: isLockActive ? block.lockedBy : null,
           lockedAt: isLockActive ? block.lockedAt : null,
           lockedByName: isLockActive ? lockedByName : null,
@@ -75,12 +149,14 @@ export class ContentService {
     if (!metadata || typeof metadata !== 'object') return metadata;
     const next = { ...metadata };
     if (typeof next.imageUrl === 'string') {
-      next.imageUrl = next.imageUrl.trim() || undefined;
+      const normalized = normalizeImagePath(next.imageUrl);
+      next.imageUrl = normalized || undefined;
     }
     if (Array.isArray(next.galleryImages)) {
       next.galleryImages = next.galleryImages
         .filter((item: any) => typeof item === 'string' && item.trim())
-        .map((item: string) => item.trim())
+        .map((item: string) => normalizeImagePath(item.trim()))
+        .filter(Boolean)
         .slice(0, 9);
     }
     return next;

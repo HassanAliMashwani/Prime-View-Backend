@@ -1468,7 +1468,17 @@ export const initialContentBlocks: ContentBlock[] = [
     metadata: {
       date: 'Monday, 17 August | 12:00 PM',
       location: 'Rosecliff Marquee, Main Margalla Road, E-11/1, Islamabad',
-      imageUrl: '/new assests/Events and media/event1/QAS07562_improved.png',
+      imageUrl: '/new assests/Events and media/event1/QAS07033.JPG_2K_202609031135.jpeg',
+      galleryImages: [
+        '/new assests/Events and media/event1/WhatsApp Image 2026-09-06 at 3.10.12 PM.jpeg',
+        '/new assests/Events and media/event1/QAS07025.JPG_202609031129.jpeg',
+        '/new assests/Events and media/event1/QAS07031.JPG_2K_202609031134.jpeg',
+        '/new assests/Events and media/event1/QAS07033.JPG_2K_202609031135.jpeg',
+        '/new assests/Events and media/event1/QAS07562_improved.png',
+        '/new assests/Events and media/event1/QAS07590_glow.png',
+        '/new assests/Events and media/event1/QAS07600.png_2K_202609031145.jpeg',
+        '/new assests/Events and media/event1/QAS07627.JPG_202609031125.jpeg',
+      ],
       featured: true,
       tags: ['Official Ceremony', 'Pre-Launch', 'Leadership', 'Rosecliff Marquee'],
       contact: '0333 0111112',
