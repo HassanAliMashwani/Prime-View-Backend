@@ -150,14 +150,34 @@ export class ContentService {
     const next = { ...metadata };
     if (typeof next.imageUrl === 'string') {
       const normalized = normalizeImagePath(next.imageUrl);
-      next.imageUrl = normalized || undefined;
+      if (normalized) {
+        next.imageUrl = normalized;
+      } else {
+        delete next.imageUrl;
+      }
+    } else if (next.imageUrl === null || next.imageUrl === undefined || next.imageUrl === '') {
+      delete next.imageUrl;
     }
+
+    if (typeof next.videoUrl === 'string') {
+      const trimmed = next.videoUrl.trim();
+      if (trimmed) {
+        next.videoUrl = trimmed;
+      } else {
+        delete next.videoUrl;
+      }
+    } else if (next.videoUrl === null || next.videoUrl === undefined || next.videoUrl === '') {
+      delete next.videoUrl;
+    }
+
     if (Array.isArray(next.galleryImages)) {
       next.galleryImages = next.galleryImages
         .filter((item: any) => typeof item === 'string' && item.trim())
         .map((item: string) => normalizeImagePath(item.trim()))
         .filter(Boolean)
         .slice(0, 9);
+    } else if (next.galleryImages === null || next.galleryImages === undefined) {
+      delete next.galleryImages;
     }
     return next;
   }
@@ -337,11 +357,21 @@ export class ContentService {
     }
 
     const existingMetadata = (block.metadata as Record<string, any>) || {};
-    const updatedMetadata = await this.sanitizeMetadataImages({
+    const incomingMetadata = (dto.metadata || {}) as Record<string, any>;
+    const mergedMetadata: Record<string, any> = {
       ...existingMetadata,
       ...(dto.category ? { category: dto.category.trim() } : {}),
-      ...(dto.metadata || {}),
-    });
+      ...incomingMetadata,
+    };
+
+    // If any field in incomingMetadata was explicitly passed as null, undefined, or empty string, remove it so deletions persist
+    for (const [key, val] of Object.entries(incomingMetadata)) {
+      if (val === null || val === undefined || val === '') {
+        delete mergedMetadata[key];
+      }
+    }
+
+    const updatedMetadata = await this.sanitizeMetadataImages(mergedMetadata);
 
     const oldSnapshot = {
       title: block.title,
