@@ -56,6 +56,8 @@ const EVENT1_DEFAULT_GALLERY = [
 @Injectable()
 export class ContentService {
   private readonly lockExpiryMs = 30 * 60 * 1000; // 30 minutes
+  private readonly publicCache = new Map<string, { timestamp: number; data: any }>();
+  private readonly cacheTtlMs = 60 * 1000; // 60s short-term cache for repeated public reads
 
   constructor(
     private prisma: PrismaService,
@@ -67,6 +69,14 @@ export class ContentService {
    * List all CMS content blocks with optional section filtering ('plans' | 'events').
    */
   async getContentBlocks(section?: 'plans' | 'events', session?: any) {
+    if (!session) {
+      const cacheKey = section || 'all';
+      const cached = this.publicCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < this.cacheTtlMs) {
+        return cached.data;
+      }
+    }
+
     const where: any = {};
     if (section) {
       where.section = section as ContentSection;
@@ -143,7 +153,11 @@ export class ContentService {
       }),
     );
 
-    return { ok: true, blocks: enriched };
+    const result = { ok: true, blocks: enriched };
+    if (!session) {
+      this.publicCache.set(section || 'all', { timestamp: Date.now(), data: result });
+    }
+    return result;
   }
   sanitizeMetadataImages(metadata?: any) {
     if (!metadata || typeof metadata !== 'object') return metadata;
@@ -259,6 +273,8 @@ export class ContentService {
       lockedAt: now.getTime(),
     });
 
+    this.publicCache.clear();
+
     return {
       ok: true,
       block: {
@@ -317,6 +333,8 @@ export class ContentService {
       contentBlockId: blockId,
       reason: 'MANUAL_RELEASE',
     });
+
+    this.publicCache.clear();
 
     return { ok: true };
   }
@@ -427,6 +445,8 @@ export class ContentService {
       reason: 'SAVE_COMPLETED',
     });
 
+    this.publicCache.clear();
+
     return { ok: true, block: result };
   }
 
@@ -492,6 +512,8 @@ export class ContentService {
       createdBy: session.fullName || session.username,
     });
 
+    this.publicCache.clear();
+
     return { ok: true, block: result };
   }
 
@@ -538,6 +560,8 @@ export class ContentService {
       contentBlockId: blockId,
       deletedBy: session.fullName || session.username,
     });
+
+    this.publicCache.clear();
 
     return { ok: true };
   }

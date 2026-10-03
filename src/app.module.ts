@@ -16,6 +16,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { SalesModule } from './sales/sales.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { HealthModule } from './health/health.module';
+import { JobsModule } from './jobs/jobs.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { HealthModule } from './health/health.module';
     SalesModule,
     InventoryModule,
     HealthModule,
+    JobsModule,
   ],
   controllers: [],
   providers: [PrismaService],
