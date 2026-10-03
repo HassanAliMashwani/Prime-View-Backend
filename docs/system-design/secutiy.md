@@ -196,4 +196,53 @@ The system has been refactored to implement a true server-side leaky-bucket refi
   3. Once the restore finishes, copy the new connection string into the backend's `DATABASE_URL` environment variable.
   4. Redeploy the backend service. Verify connectivity at `https://prime-view-backend.onrender.com/health`.
 
+---
+
+## PART 4: Public Legal Pages, Consent & SEO Compliance
+
+### 4.1 Legal & Statutory Pages Shipped (Pakistan Jurisdiction)
+All legal pages contain real Prime View cooperative society details (Abbottabad, Pakistan) and lead with the mandatory notice:
+> **"Draft for owner review. The society owner will confirm the final legal text."**  
+> *(No claims of &quot;DPDP certified&quot; or &quot;lawyer approved&quot; are made. DPDP is an Indian statute; Prime View is governed under the cooperative housing framework of Khyber Pakhtunkhwa, Pakistan).*
+
+1. **Privacy Policy (`/privacy`)**:
+   - Detailed disclosure of data collected (Applicant names, CNIC/NICOP, mobile numbers, mailing address, nominee details, and uploaded bank deposit slips).
+   - Strict data minimization: data used only for plot file issuance, installment verification, and ballot communication.
+2. **Terms and Conditions (`/terms`)**:
+   - Plot reservation rules, 7-14 day token deposit hold durations, forfeiture conditions upon non-payment, installment remittance in PKR, and re-survey adjustment protocols.
+   - Dispute jurisdiction explicitly placed with competent courts in Abbottabad, Pakistan.
+3. **Cookies Policy (`/cookies`)**:
+   - Classifies essential technical authentication cookies (`pv_admin_token`, `pv_member_token`) and consent cookies (`pv_cookie_consent`).
+   - Discloses that optional analytics cookies remain strictly disabled until explicit affirmative consent.
+4. **Refund & Cancellation Policy (`/refund`)**:
+   - Token refund eligibility (written cancellation within 72 hours), file surrender deduction terms (10% administrative processing fee on active bookings), non-refundable statutory admission fees, and payout processing via crossed pay-orders (45-60 banking days).
+5. **Custom 404 Page (`/_not-found`)**:
+   - Branded Abbottabad society error view with direct navigation back to `/` and `/contact`.
+
+### 4.2 Consent Mechanics & Spam Defense
+- **Cookie Consent Banner (`CookieConsentBanner.tsx`)**:
+  - Mounted globally in `RootLayout`.
+  - Blocks all optional tracking/analytics cookies prior to explicit **Accept**.
+  - Provides a direct **Reject All** option and persists state in `localStorage` (`pv_cookie_consent`).
+- **Contact Form Validation & Bot Protection (`ContactForm.tsx`)**:
+  - **Honeypot**: Hidden trap field (`_society_inquiry_hp`) invisible to human visitors. Traps and silently discards automated spam bot submissions.
+  - **Form Consent**: Mandatory affirmative checkbox: *"I consent to Prime View Cooperative Housing Society storing my contact details and contacting me regarding this property inquiry. (Draft for owner review)."*
+  - **Validation**: Strict character checks for full legal name, phone/WhatsApp number, and inquiry message.
+  - **Rate Limiting**: Enforces a 60-second client submission cooldown (`sessionStorage`) to stop rapid form flooding without requiring paid CAPTCHA providers.
+  - **Data Minimization**: Only requires `name`, `number`, and `message`. No excessive personal fields.
+
+### 4.3 Search Engine Optimization (SEO) & Web Standards
+- **Favicon**: Deployed globally via `src/app/icon.png` and `public/favicon.ico` for universal cross-browser display.
+- **Sitemap & Robots**:
+  - `sitemap.xml`: Generated via `src/app/sitemap.ts` mapping all public marketing and legal routes.
+  - `robots.txt`: Generated via `src/app/robots.ts` allowing Googlebot and indexers on public routes (`/`) while strictly disallowing private administrative dashboards (`/admin/`, `/society-members/`, `/api/`).
+- **Headings & Metadata**:
+  - Semantic single `<h1>` hierarchy verified on all public pages (`/`, `/our-plans`, `/events-and-media`, `/contact`, `/privacy`, `/terms`, `/cookies`, `/refund`).
+  - Canonical tags (`alternates: { canonical: ... }`) configured across all public pages.
+  - Social preview cards (`OpenGraph` and `Twitter summary_large_image`) using real society master plan assets (`/master-plan/Master Plan.png`). Zero invented author bios or Forbes links.
+- **Link Integrity**:
+  - Eliminated placeholder `#` links in footer navigation, routing to real legal pages.
+  - Footer explicitly displays physical secretariat coordinates: *Main Secretariat, Supply Road, Abbottabad, Pakistan*.
+
+
 
