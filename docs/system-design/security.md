@@ -133,7 +133,7 @@ The system has been refactored to implement a true server-side leaky-bucket refi
 | **Exposed Logs** | Entire backend codebase | **Clean**: Zero logging of passwords, plaintext secrets, tokens, or banking PANs. |
 | **Exposed Source Maps** | `next.config.ts` | **Hardened**: Explicitly configured `productionBrowserSourceMaps: false` so production bundles never ship source maps to client browsers. |
 | **Prompt Injection & AI Access** | Entire application | **no AI route**: No AI model routes exist in this application. |
-| **Excessive DB Permissions** | Database connection | **App DB Role**: `postgres` (Supabase pooled user; superuser privileges are disabled on hosted database). |
+| **Excessive DB Permissions** | Database connection | **App DB Role**: `postgres` (Supabase connection user). Host provider manages default role privileges; owner must audit and configure a dedicated least-privilege role if superuser-level capabilities are to be revoked. |
 | **Poor Tenant Isolation** | Database schema | **Single Tenant Society**: Dedicated database for Prime View Housing Society Abbottabad. No foreign tenant data mixed. |
 | **Missing Audit Logs** | `src/auth/auth.service.ts` | **Hardened**: Added audit logging to `AuditEntry` for `ADMIN_LOGIN_SUCCESS`, `ADMIN_LOGIN_FAILURE`, `MEMBER_LOGIN_SUCCESS`, and `MEMBER_LOGIN_FAILURE` with consecutive failure metrics (without recording passwords). |
 | **Exposed Internal Dashboards** | `src/middleware.ts`, `src/health/health.service.ts` | **Hardened**: `/admin` and `/society-members` portal routes are guarded at the Next.js edge and redirect unauthenticated visits to login. `/health` remains public, returning solely `{ ok: true }` without secrets. |
@@ -219,17 +219,13 @@ All legal pages contain real Prime View cooperative society details (Abbottabad,
 5. **Custom 404 Page (`/_not-found`)**:
    - Branded Abbottabad society error view with direct navigation back to `/` and `/contact`.
 
-### 4.2 Consent Mechanics & Spam Defense
+### 4.2 Consent Mechanics & Form Status
 - **Cookie Consent Banner (`CookieConsentBanner.tsx`)**:
   - Mounted globally in `RootLayout`.
   - Blocks all optional tracking/analytics cookies prior to explicit **Accept**.
   - Provides a direct **Reject All** option and persists state in `localStorage` (`pv_cookie_consent`).
-- **Contact Form Validation & Bot Protection (`ContactForm.tsx`)**:
-  - **Honeypot**: Hidden trap field (`_society_inquiry_hp`) invisible to human visitors. Traps and silently discards automated spam bot submissions.
-  - **Form Consent**: Mandatory affirmative checkbox: *"I consent to Prime View Cooperative Housing Society storing my contact details and contacting me regarding this property inquiry. (Draft for owner review)."*
-  - **Validation**: Strict character checks for full legal name, phone/WhatsApp number, and inquiry message.
-  - **Rate Limiting**: Enforces a 60-second client submission cooldown (`sessionStorage`) to stop rapid form flooding without requiring paid CAPTCHA providers.
-  - **Data Minimization**: Only requires `name`, `number`, and `message`. No excessive personal fields.
+- **Contact Form (`ContactForm.tsx`)**:
+  - The contact form never leaves the browser and is not saved to any server endpoint. Client-side validation, honeypot field, and a 60-second sessionStorage timer exist on the front end, but because no server write route exists, server spam protection is marked **not in this app**.
 
 ### 4.3 Search Engine Optimization (SEO) & Web Standards
 - **Favicon**: Deployed globally via `src/app/icon.png` and `public/favicon.ico` for universal cross-browser display.
@@ -275,22 +271,18 @@ All legal pages contain real Prime View cooperative society details (Abbottabad,
 - **Preservation Protections**:
   - **Commercial Map & Elite Map**: Untouched. No recompression applied to any map files, SVG overlays, or polygon coordinate assets.
   - **PNG Map Clicks**: All PNG maps and click-detection coordinate maps remain intact with zero loss of interactive fidelity.
-  - **WebP Preference**: Retained existing WebP assets where supported by the Next.js `Image` pipeline without breaking legacy browser fallbacks.
+  - **Recompression Note**: Recompressing JPEG and PNG is image compression only. WebP conversions, color contrast changes, mobile viewport redesigns, and accessibility refactoring were not performed in this phase.
 
 ### 5.3 Elimination of Layout Jumps (Cumulative Layout Shift)
 - **`/our-plans`**: The payment plan carousel container was updated with a stable minimum height (`min-h-[580px]`). This eliminates vertical displacement when the skeleton loader transitions into loaded plan cards.
 - **`/events-and-media`**: The event cards section was assigned a stable minimum height (`min-h-[480px]`), preventing the footer from shifting upward during initial page rendering.
 - **Hero Section**: Retains full viewport height constraints (`h-dvh min-h-[600px]`) and high-priority Next.js image loading to ensure zero layout shift during viewport hydration.
 
-### 5.4 In-Process PostgreSQL Background Job Worker
-- **Architecture**: Implemented in `src/jobs/jobs.service.ts`, `src/jobs/jobs.controller.ts`, and `src/jobs/jobs.module.ts`.
-- **Database Table**: Automatically provisions table `background_jobs` in PostgreSQL via raw SQL on module boot without requiring `prisma db push`.
-- **Concurrency & Locking**: Employs PostgreSQL row-level locks (`FOR UPDATE SKIP LOCKED`) to ensure exactly-once processing among worker ticks.
-- **Workload Scope**:
-  - `receipt_file_processing`: Asynchronous post-upload integrity, virus scanning, and hash checks.
-  - `notice_sending`: Background society email/SMS notice dispatching.
-  - `heavy_report`: Generation of intensive financial and plot inventory report summaries.
-- **Non-Blocking Execution**: Enqueued jobs return HTTP 202 Accepted immediately. The client page never waits for background file processing or notice batches.
+### 5.4 In-Process PostgreSQL Background Job Worker Status
+- **Architecture**: Implemented scaffolding in `src/jobs/jobs.service.ts`, `src/jobs/jobs.controller.ts`, and `src/jobs/jobs.module.ts`.
+- **Database Table**: Dynamically provisions table `background_jobs` in PostgreSQL via raw SQL on boot without requiring `prisma db push`.
+- **Workload Scope**: Designed for asynchronous `receipt_file_processing` (file integrity/hash check), `notice_sending` (society notice dispatching), and `heavy_report` (financial/inventory summary generation).
+- **Current Integration Status**: While the table creation, polling ticker, and row-locking worker exist in code, no active customer or admin workflows currently dispatch jobs through it, and no virus-scanning daemon runs. Accordingly, this is marked **not in this app** for the live application until end-to-end asynchronous tasks are wired.
 - **Safety Boundary**: Payment math, plot status transitions, and plot bookings remain strictly synchronous and atomic. No Redis or external broker was added.
 
 ### 5.5 Honest Page Load Measurement

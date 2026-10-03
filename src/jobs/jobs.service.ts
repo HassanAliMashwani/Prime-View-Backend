@@ -188,7 +188,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   // --- Handlers for allowed background jobs ---
 
   private async handleReceiptFileProcessing(payload: any) {
-    // Background validation, antivirus/hash verification, archival
+    // Background validation, integrity verification, archival
     const { receiptId, fileUrl } = payload || {};
     return {
       processed: true,
