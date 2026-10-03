@@ -25,17 +25,41 @@ if (fs.existsSync(envPath)) {
 
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { TypedErrorFilter } from './common/filters/typed-error.filter';
 
 async function bootstrap() {
+  // Production JWT secret verification - refuse to boot on missing or known placeholder secrets
+  const isProd = process.env.NODE_ENV === 'production';
+  const jwtSecret = process.env.JWT_SECRET;
+  const knownPlaceholders = [
+    'super-secret-default-key-for-dev',
+    'secret',
+    'changeme',
+    'your-secret-key',
+    'placeholder',
+    'jwt-secret',
+    'default',
+  ];
+
+  if (isProd) {
+    if (!jwtSecret || knownPlaceholders.includes(jwtSecret.toLowerCase()) || jwtSecret.length < 32) {
+      throw new Error(
+        '[FATAL SECURITY ERROR] Production refuses to boot: JWT_SECRET is missing, insecure, or a known placeholder.',
+      );
+    }
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.useBodyParser('json', { limit: '15mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '15mb' });
+
+  // Whitelist known origins strictly - no wildcard allowed
   const allowedOrigins = [
     process.env.FRONTEND_URL,
     'https://prime-view-livid.vercel.app',
-    'http://localhost:3000',
+    !isProd ? 'http://localhost:3000' : undefined,
   ].filter(Boolean) as string[];
 
   app.enableCors({
@@ -43,7 +67,18 @@ async function bootstrap() {
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
   });
+
+  // Global DTO whitelisting to eliminate mass-assignment vulnerabilities
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidUnknownValues: false,
+    }),
+  );
+
   app.useGlobalFilters(new TypedErrorFilter());
   await app.listen(process.env.PORT ?? 3001);
 }
 bootstrap();
+

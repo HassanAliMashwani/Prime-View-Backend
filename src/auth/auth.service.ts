@@ -128,6 +128,19 @@ export class AuthService {
         data: { failedLoginAttempts: newCount, lockedUntil },
       });
 
+      // Audit log failed login
+      await this.prisma.auditEntry.create({
+        data: {
+          actorId: user.id,
+          actorName: user.fullName,
+          actorRole: user.role,
+          action: 'ADMIN_LOGIN_FAILURE',
+          entityType: 'AdminUser',
+          entityId: user.id,
+          details: `Failed admin login attempt for ${user.username}. Consecutive failure count: ${newCount}`,
+        },
+      });
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -138,6 +151,19 @@ export class AuthService {
         data: { failedLoginAttempts: 0, lockedUntil: null },
       });
     }
+
+    // Audit log successful login
+    await this.prisma.auditEntry.create({
+      data: {
+        actorId: user.id,
+        actorName: user.fullName,
+        actorRole: user.role,
+        action: 'ADMIN_LOGIN_SUCCESS',
+        entityType: 'AdminUser',
+        entityId: user.id,
+        details: `Admin ${user.username} authenticated successfully.`,
+      },
+    });
 
     const payload = {
       adminId: user.id,
@@ -196,6 +222,19 @@ export class AuthService {
         data: { failedLoginAttempts: newCount, lockedUntil },
       });
 
+      // Audit log failed member login
+      await this.prisma.auditEntry.create({
+        data: {
+          actorId: customer.id,
+          actorName: customer.fullName,
+          actorRole: 'customer',
+          action: 'MEMBER_LOGIN_FAILURE',
+          entityType: 'Customer',
+          entityId: customer.id,
+          details: `Failed member login attempt for ${customer.membershipNo}. Consecutive failure count: ${newCount}`,
+        },
+      });
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -208,6 +247,20 @@ export class AuthService {
         lastLogin: now,
       },
     });
+
+    // Audit log successful member login
+    await this.prisma.auditEntry.create({
+      data: {
+        actorId: customer.id,
+        actorName: customer.fullName,
+        actorRole: 'customer',
+        action: 'MEMBER_LOGIN_SUCCESS',
+        entityType: 'Customer',
+        entityId: customer.id,
+        details: `Member ${customer.membershipNo} authenticated successfully.`,
+      },
+    });
+
 
     const payload = {
       customerId: customer.id,

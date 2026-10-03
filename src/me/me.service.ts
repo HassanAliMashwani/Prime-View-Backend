@@ -28,12 +28,22 @@ export class MeService {
     return this.prisma.withScopedSession({ role: 'customer', customerId }, async (tx) => {
       return tx.paymentRecord.findMany({
         where: {
-          booking: { customerId }
+          booking: { customerId },
         },
         orderBy: {
-          dueDate: 'desc'
-        }
+          dueDate: 'desc',
+        },
+      });
+    });
+  }
+
+  async getDocuments(customerId: string) {
+    return this.prisma.withScopedSession({ role: 'customer', customerId }, async (tx) => {
+      return tx.societyDocument.findMany({
+        where: { customerId },
+        orderBy: { uploadedAt: 'desc' },
       });
     });
   }
 }
+

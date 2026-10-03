@@ -26,6 +26,12 @@ export class PermissionScopeGuard implements CanActivate {
 
     // Member sessions don't have permissions/assignedBlocks, they are identity-scoped in controllers
     if (session.role === 'customer') {
+      if (requiredPermission) {
+        throw new ForbiddenException({
+          reason: 'PERMISSION_DENIED',
+          message: 'Society member accounts cannot access administrative endpoints.',
+        });
+      }
       return true;
     }
 

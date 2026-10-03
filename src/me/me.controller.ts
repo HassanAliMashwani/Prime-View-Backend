@@ -23,4 +23,13 @@ export class MeController {
     }
     return this.meService.getPayments(session.customerId);
   }
+
+  @Get('documents')
+  async getDocuments(@CurrentSession() session: any) {
+    if (session.role !== 'customer') {
+      throw new ForbiddenException('Only customers can access this route');
+    }
+    return this.meService.getDocuments(session.customerId);
+  }
 }
+

@@ -32,13 +32,26 @@ export class ReceiptsService {
    */
   async submitPaymentReceipt(dto: SubmitReceiptDto, session: any) {
     // Resolve customer identity
-    const customerId = session.customerId || session.id || dto.customerId;
+    let customerId: string;
+    if (session.role === 'customer') {
+      if (dto.customerId && dto.customerId !== session.customerId) {
+        throw new ForbiddenException({
+          error: 'IDOR_FORBIDDEN',
+          message: 'You cannot submit receipts on behalf of another member account.',
+        });
+      }
+      customerId = session.customerId;
+    } else {
+      customerId = dto.customerId || session.customerId || session.id;
+    }
+
     if (!customerId) {
       throw new BadRequestException({
         error: 'CUSTOMER_REQUIRED',
         message: 'Customer ID could not be identified.',
       });
     }
+
 
     const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({ where: { id: customerId } });

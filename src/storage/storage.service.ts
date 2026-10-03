@@ -242,6 +242,11 @@ export class StorageService {
       throw new BadRequestException('INVALID_BUCKET');
     }
 
+    // Path traversal prevention: keys must not contain relative path characters or leading slashes
+    if (dto.key.includes('..') || dto.key.startsWith('/') || dto.key.includes('\\')) {
+      throw new BadRequestException('PATH_TRAVERSAL_DETECTED: Invalid object key path');
+    }
+
     const expiresIn = 900; // 15 minutes
 
     // Public bucket returns immediate public CDN URL
@@ -294,9 +299,21 @@ export class StorageService {
 
   /**
    * Inspects buffer magic bytes to determine the true content type,
-   * defeating malicious disguised extensions (e.g. photo.jpg containing EXE).
+   * defeating malicious disguised extensions (e.g. photo.jpg containing EXE or HTML script).
    */
   detectRealMimeFromBytes(buffer: Buffer): { mimeType: string; isExecutable: boolean } {
+    // Check for dangerous disguised script/HTML content
+    const sample = buffer.subarray(0, Math.min(buffer.length, 512)).toString('utf8').toLowerCase();
+    if (
+      sample.includes('<html') ||
+      sample.includes('<script') ||
+      sample.includes('<?php') ||
+      sample.includes('<svg') ||
+      sample.includes('javascript:')
+    ) {
+      return { mimeType: 'text/html', isExecutable: true };
+    }
+
     if (buffer.length >= 3 && buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
       return { mimeType: 'image/jpeg', isExecutable: false };
     }
@@ -318,6 +335,7 @@ export class StorageService {
     }
     return { mimeType: 'application/octet-stream', isExecutable: false };
   }
+
 
   /**
    * Post-Upload Verification (Method B - Doc 10 §6):

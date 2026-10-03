@@ -22,9 +22,15 @@ const prisma = new PrismaClient({
 
 async function main() {
   console.log('Seeding database...');
-  const adminHash  = await bcrypt.hash('admin123',  10);
-  const memberHash = await bcrypt.hash('password123', 10);
-  const defaultHash = adminHash; // kept for any other references below
+  // Security Hardening: Never seed known guessable default passwords.
+  // Generate random cryptographic entropy hashes. The owner must set the production admin password himself.
+  const randomAdminEntropy = crypto.randomBytes(32).toString('hex');
+  const randomMemberEntropy = crypto.randomBytes(32).toString('hex');
+  const adminHash = await bcrypt.hash(randomAdminEntropy, 12);
+  const memberHash = await bcrypt.hash(randomMemberEntropy, 12);
+  const defaultHash = adminHash;
+  console.log('[SECURITY NOTICE] Initial credentials generated with high-entropy random secrets. The society owner must configure their own secure admin password via the administrative portal.');
+
 
   // 1. Create Blocks
   for (const block of initialBlocks) {
