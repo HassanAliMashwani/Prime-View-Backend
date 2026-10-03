@@ -62,13 +62,17 @@ async function bootstrap() {
     !isProd ? 'http://localhost:3000' : undefined,
   ].filter(Boolean) as string[];
 
-  app.enableCors({
-    origin: allowedOrigins,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
+  // Global Security Headers & HSTS on API
+  app.use((req: any, res: any, next: any) => {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
   });
 
   // Global DTO whitelisting to eliminate mass-assignment vulnerabilities
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

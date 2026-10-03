@@ -138,3 +138,62 @@ The system has been refactored to implement a true server-side leaky-bucket refi
 | **Missing Audit Logs** | `src/auth/auth.service.ts` | **Hardened**: Added audit logging to `AuditEntry` for `ADMIN_LOGIN_SUCCESS`, `ADMIN_LOGIN_FAILURE`, `MEMBER_LOGIN_SUCCESS`, and `MEMBER_LOGIN_FAILURE` with consecutive failure metrics (without recording passwords). |
 | **Exposed Internal Dashboards** | `src/middleware.ts`, `src/health/health.service.ts` | **Hardened**: `/admin` and `/society-members` portal routes are guarded at the Next.js edge and redirect unauthenticated visits to login. `/health` remains public, returning solely `{ ok: true }` without secrets. |
 
+---
+
+## PART 3: Headers, Cookies, Transport & Dependency Security
+
+### 3.1 Transport Security & Security Headers
+- **Strict HTTPS & HSTS**:
+  - Frontend (`next.config.ts`): Sets `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` (2-year preload-ready HSTS).
+  - Backend API (`main.ts`): Sets `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
+- **Content-Security-Policy (CSP)**:
+  - Configured in `next.config.ts`.
+  - Scripts: Restricted to `'self'`, `'unsafe-inline'`, `'unsafe-eval'` (required for Next.js app router hydration), and verified YouTube embed frames (`https://www.youtube.com`, `https://s.ytimg.com`).
+  - Styles: `'self'`, `'unsafe-inline'`, and Google Fonts.
+  - Images: `'self'`, `data:`, `blob:`, `https:`, `http:` (preserving public photos, plot map polygons, and Cloudflare R2 / Supabase CDN assets).
+  - Frames: YouTube video embed (`https://www.youtube.com`, `https://www.youtube-nocookie.com`).
+  - Connect: `'self'`, `https://prime-view-backend.onrender.com`, `https://*.supabase.co`, `wss://*.supabase.co`.
+- **Framing & Clickjacking Defense**:
+  - `X-Frame-Options: SAMEORIGIN` on frontend, `X-Frame-Options: DENY` on backend.
+- **MIME Sniffing & Referrers**:
+  - `X-Content-Type-Options: nosniff`.
+  - `Referrer-Policy: strict-origin-when-cross-origin`.
+
+### 3.2 Cookie & Session Hygiene
+- **Session Tokens**: Authentication uses JWT tokens passed via the standard HTTP `Authorization: Bearer <token>` header.
+- **Cookie Security**: Where cookies are used for portal state, cookies are configured with `SameSite=Lax; Secure; HttpOnly`. No session bearer tokens are accessible to arbitrary third-party cross-site requests.
+- **Logout Invalidation**: Logout flushes client storage (`sessionStorage.clear()`) and expires session cookies (`max-age=0`).
+
+### 3.3 Data Encryption at Rest & in Transit
+- **TLS Everywhere**: All browser-to-frontend, frontend-to-API, and API-to-PostgreSQL/Supabase connections require TLS in transit.
+- **Password Hashing**: Zero custom or home-grown encryption ciphers are rolled. Passwords are salted and hashed using **bcrypt** (cost factor 10 to 12). Password plaintext and raw hashes are never exposed in logs or API payloads.
+
+### 3.4 Dependency Vulnerability Audit
+- **Frontend Audit**:
+  - Executed `npm audit fix`. Patched `brace-expansion` quadratic CPU recursion advisory.
+  - **Remaining Advisory**: `braces` (deeply nested pattern stack exhaustion) in `chokidar` via `tailwindcss@3.4.19`. Upgrading requires `npm audit fix --force` which installs `tailwindcss@4.3.3`, a breaking major rewrite that alters CSS directives and breaks the layout. Maintained on Tailwind v3 for stability.
+- **Backend Audit**:
+  - Backend dependencies run with direct npm packages (`package.json`). Running `npm audit` returned `ENOLOCK` (no lockfile committed). Package manifests rely on pinned minor/patch versions.
+
+### 3.5 Unreviewed Code Scope Disclosure
+- **Scope Limit**: Line-level defensive review and automated verification were strictly conducted on the diff and files introduced or updated during this `P4-SECURITY-PHASE`. Historical modules outside this scope were not subjected to full line-by-line manual code review.
+
+### 3.6 Error Monitoring & Telemetry Hook
+- **Implementation**: Located in `src/common/filters/typed-error.filter.ts`.
+- **Data Minimization**: Captures solely HTTP method, route path (with query strings stripped), error name, and HTTP status code (`>= 500`). Strictly omits request bodies, passwords, tokens, and authorization headers.
+- **Dormant Configuration**: Hook checks `process.env.ERROR_MONITORING_DSN` and remains 100% inert and dormant until the society owner explicitly provides an error monitoring endpoint.
+
+### 3.7 Database Backup & Disaster Recovery Guide for Society Owner
+> **Owner Action Required**: Automated database backups must be verified in the cloud host dashboard.
+- **Provider**: Render Managed PostgreSQL (`prime-view-backend-db`).
+- **Backup Verification**:
+  1. Log into [Render Dashboard](https://dashboard.render.com).
+  2. Select your PostgreSQL database instance `prime-view-backend-db`.
+  3. Click on the **Backups** tab. Confirm that **Automated Daily Backups** are toggled **ON** (retained for 7 days on standard plans).
+- **Point-in-Time Recovery (PITR) & Restoration Steps**:
+  1. In the **Backups** tab, locate the desired snapshot timestamp.
+  2. Click **Restore**. Render will prompt to restore to a new database instance or overwrite.
+  3. Once the restore finishes, copy the new connection string into the backend's `DATABASE_URL` environment variable.
+  4. Redeploy the backend service. Verify connectivity at `https://prime-view-backend.onrender.com/health`.
+
+
