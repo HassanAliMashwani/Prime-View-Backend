@@ -36,7 +36,7 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
     try {
       await this.runSweep();
     } catch (err) {
-      this.logger.error(`Startup sweep failed: ${err.message}`, err.stack);
+      this.logger.error('Startup sweep failed');
     }
 
     // 2. Schedule autonomous ticker every 5 seconds
@@ -44,7 +44,7 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.runSweep();
       } catch (err) {
-        this.logger.error(`Autonomous sweep cycle failed: ${err.message}`, err.stack);
+        this.logger.error('Autonomous sweep cycle failed');
       }
     }, this.intervalMs);
 
@@ -293,7 +293,7 @@ export class SweepService implements OnModuleInit, OnModuleDestroy {
       this.lastSweepTime = now;
       this.totalSweepsRun++;
     } catch (error) {
-      this.logger.error(`Sweep execution encountered error: ${error.message}`, error.stack);
+      this.logger.error('Sweep execution encountered an error');
       throw error;
     } finally {
       this.isRunning = false;

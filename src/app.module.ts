@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { AuthModule } from './auth/auth.module';
 import { PrismaService } from './prisma/prisma.service';
 import { BlocksModule } from './blocks/blocks.module';
@@ -12,7 +13,7 @@ import { ContentModule } from './content/content.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { SweepModule } from './sweep/sweep.module';
 import { StorageModule } from './storage/storage.module';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { SalesModule } from './sales/sales.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { HealthModule } from './health/health.module';
@@ -22,7 +23,7 @@ import { JobsModule } from './jobs/jobs.module';
   imports: [
     ThrottlerModule.forRoot([{
       ttl: 60000,
-      limit: 10,
+      limit: 120,
     }]),
     RealtimeModule,
     AuthModule,
@@ -42,6 +43,12 @@ import { JobsModule } from './jobs/jobs.module';
     JobsModule,
   ],
   controllers: [],
-  providers: [PrismaService],
+  providers: [
+    PrismaService,
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule {}

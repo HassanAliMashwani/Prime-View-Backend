@@ -53,8 +53,9 @@ export class SalesService {
         if (assignedBlocks.length === 0) {
           conditions.push(`1 = 0`);
         } else {
-          const blockIds = assignedBlocks.map(b => `'${b}'`).join(',');
-          conditions.push(`p."blockId" IN (${blockIds})`);
+          const placeholders = assignedBlocks.map(() => `$${paramIdx++}`).join(',');
+          conditions.push(`p."blockId" IN (${placeholders})`);
+          params.push(...assignedBlocks);
         }
       }
 
@@ -210,7 +211,7 @@ export class SalesService {
       };
 
     } catch (error) {
-      this.logger.error(`Sales History Error: ${error.message}`, error.stack);
+      this.logger.error('Sales history query failed');
       if (error instanceof ForbiddenException) {
         throw error; // Let nest handle 403
       }
@@ -241,15 +242,20 @@ export class SalesService {
 
   private async computeTodayStats(session: any, filterAdminId: string | undefined, assignedBlocks: string[] | null) {
     const conditions = [`a.action = 'PLOT_BOOKED'`, `a.timestamp >= CURRENT_DATE`];
+    const params: any[] = [];
+    let paramIdx = 1;
+
     if (filterAdminId && filterAdminId !== 'all') {
-      conditions.push(`a."actorId" = '${filterAdminId}'`);
+      conditions.push(`a."actorId" = $${paramIdx++}`);
+      params.push(filterAdminId);
     }
     if (assignedBlocks !== null) {
       if (assignedBlocks.length === 0) {
         conditions.push(`1 = 0`);
       } else {
-        const blockIds = assignedBlocks.map(b => `'${b}'`).join(',');
-        conditions.push(`p."blockId" IN (${blockIds})`);
+        const placeholders = assignedBlocks.map(() => `$${paramIdx++}`).join(',');
+        conditions.push(`p."blockId" IN (${placeholders})`);
+        params.push(...assignedBlocks);
       }
     }
     const whereClause = `WHERE ${conditions.join(' AND ')}`;
@@ -261,7 +267,7 @@ export class SalesService {
       JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
       ${whereClause}
     `;
-    const res = await this.prisma.$queryRawUnsafe<any[]>(query);
+    const res = await this.prisma.$queryRawUnsafe<any[]>(query, ...params);
     if (res.length > 0) {
       return {
         todayPlotsSold: Number(res[0].todayPlotsSold || 0),

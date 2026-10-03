@@ -55,7 +55,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     // Start in-process background worker ticker
     this.workerTimer = setInterval(() => {
       this.processNextJob().catch((err) => {
-        this.logger.error(`Error in background job worker cycle: ${err.message}`, err.stack);
+        this.logger.error('Background job worker cycle failed');
       });
     }, this.intervalMs);
     this.logger.log(`In-process Postgres job worker started (interval: ${this.intervalMs}ms)`);
@@ -166,7 +166,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
           status: 'completed',
         });
       } catch (execErr: any) {
-        this.logger.error(`[Queue] Job ${job.id} failed: ${execErr.message}`);
+        this.logger.error(`Job ${job.id} failed`);
         await this.prisma.$executeRawUnsafe(
           `UPDATE background_jobs
            SET status = 'failed', error = $2, updated_at = NOW()
@@ -178,7 +178,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     } catch (err: any) {
       // Postgres error or table not ready
       if (!err.message?.includes('does not exist')) {
-        this.logger.error(`Error in processNextJob: ${err.message}`);
+        this.logger.error('Error in processNextJob');
       }
     } finally {
       this.isProcessing = false;
