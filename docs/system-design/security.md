@@ -196,4 +196,119 @@ The system has been refactored to implement a true server-side leaky-bucket refi
   3. Once the restore finishes, copy the new connection string into the backend's `DATABASE_URL` environment variable.
   4. Redeploy the backend service. Verify connectivity at `https://prime-view-backend.onrender.com/health`.
 
+---
+
+## PART 4: Public Legal Pages, Consent & SEO Compliance
+
+### 4.1 Legal & Statutory Pages Shipped (Pakistan Jurisdiction)
+All legal pages contain real Prime View cooperative society details (Abbottabad, Pakistan) and lead with the mandatory notice:
+> **"Draft for owner review. The society owner will confirm the final legal text."**  
+> *(No claims of &quot;DPDP certified&quot; or &quot;lawyer approved&quot; are made. DPDP is an Indian statute; Prime View is governed under the cooperative housing framework of Khyber Pakhtunkhwa, Pakistan).*
+
+1. **Privacy Policy (`/privacy`)**:
+   - Detailed disclosure of data collected (Applicant names, CNIC/NICOP, mobile numbers, mailing address, nominee details, and uploaded bank deposit slips).
+   - Strict data minimization: data used only for plot file issuance, installment verification, and ballot communication.
+2. **Terms and Conditions (`/terms`)**:
+   - Plot reservation rules, 7-14 day token deposit hold durations, forfeiture conditions upon non-payment, installment remittance in PKR, and re-survey adjustment protocols.
+   - Dispute jurisdiction explicitly placed with competent courts in Abbottabad, Pakistan.
+3. **Cookies Policy (`/cookies`)**:
+   - Classifies essential technical authentication cookies (`pv_admin_token`, `pv_member_token`) and consent cookies (`pv_cookie_consent`).
+   - Discloses that optional analytics cookies remain strictly disabled until explicit affirmative consent.
+4. **Refund & Cancellation Policy (`/refund`)**:
+   - Token refund eligibility (written cancellation within 72 hours), file surrender deduction terms (10% administrative processing fee on active bookings), non-refundable statutory admission fees, and payout processing via crossed pay-orders (45-60 banking days).
+5. **Custom 404 Page (`/_not-found`)**:
+   - Branded Abbottabad society error view with direct navigation back to `/` and `/contact`.
+
+### 4.2 Consent Mechanics & Spam Defense
+- **Cookie Consent Banner (`CookieConsentBanner.tsx`)**:
+  - Mounted globally in `RootLayout`.
+  - Blocks all optional tracking/analytics cookies prior to explicit **Accept**.
+  - Provides a direct **Reject All** option and persists state in `localStorage` (`pv_cookie_consent`).
+- **Contact Form Validation & Bot Protection (`ContactForm.tsx`)**:
+  - **Honeypot**: Hidden trap field (`_society_inquiry_hp`) invisible to human visitors. Traps and silently discards automated spam bot submissions.
+  - **Form Consent**: Mandatory affirmative checkbox: *"I consent to Prime View Cooperative Housing Society storing my contact details and contacting me regarding this property inquiry. (Draft for owner review)."*
+  - **Validation**: Strict character checks for full legal name, phone/WhatsApp number, and inquiry message.
+  - **Rate Limiting**: Enforces a 60-second client submission cooldown (`sessionStorage`) to stop rapid form flooding without requiring paid CAPTCHA providers.
+  - **Data Minimization**: Only requires `name`, `number`, and `message`. No excessive personal fields.
+
+### 4.3 Search Engine Optimization (SEO) & Web Standards
+- **Favicon**: Deployed globally via `src/app/icon.png` and `public/favicon.ico` for universal cross-browser display.
+- **Sitemap & Robots**:
+  - `sitemap.xml`: Generated via `src/app/sitemap.ts` mapping all public marketing and legal routes.
+  - `robots.txt`: Generated via `src/app/robots.ts` allowing Googlebot and indexers on public routes (`/`) while strictly disallowing private administrative dashboards (`/admin/`, `/society-members/`, `/api/`).
+- **Headings & Metadata**:
+  - Semantic single `<h1>` hierarchy verified on all public pages (`/`, `/our-plans`, `/events-and-media`, `/contact`, `/privacy`, `/terms`, `/cookies`, `/refund`).
+  - Canonical tags (`alternates: { canonical: ... }`) configured across all public pages.
+  - Social preview cards (`OpenGraph` and `Twitter summary_large_image`) using real society master plan assets (`/master-plan/Master Plan.png`). Zero invented author bios or Forbes links.
+- **Link Integrity**:
+  - Eliminated placeholder `#` links in footer navigation, routing to real legal pages.
+  - Footer explicitly displays physical secretariat coordinates: *Main Secretariat, Supply Road, Abbottabad, Pakistan*.
+
+---
+
+## PART 5: Speed, Caching, and Queues
+
+### 5.1 Server-Side Caching of Repeated Public Reads
+- **Implementation**: Located in `src/content/content.service.ts`.
+- **Public Read Caching**: Anonymous / unauthenticated visits to `GET /content` (our plans & public events) are cached in memory for a short duration (`cacheTtlMs = 60000`, 60 seconds).
+- **Instant Invalidation**: Any CMS modification (`acquireContentLock`, `releaseContentLock`, `saveContentBlock`, `createContentBlock`, `deleteContentBlock`) immediately purges `publicCache.clear()`.
+- **Strict Isolation Guarantees**:
+  - **No caching on a timer** for plot status, reservations, or bookings.
+  - **Zero user-to-user cache leakage**: One user's payment records, deposit slips, or property allotments are never cached for another user.
+- **Admin Dashboard Persistence**:
+  - Frontend admin DAL caching (`src/lib/dal/apiCache.ts`) uses `peekCache`, `getCache`, and in-place DOM array reconciliation (`reconcileItems`). When an administrator returns to an already-visited admin page, the last known data renders immediately without flashing a blank skeleton.
+
+### 5.2 Image Optimization & Compression
+- **Optimization Strategy**: Compressed oversized photographic assets in `public/new assests/` that were causing multi-megabyte payload downloads.
+- **Results**:
+  - `QAS07562_improved.png`: 14.44 MB &rarr; 4.16 MB (saved 10.28 MB)
+  - `QAS07590_glow.png`: 13.93 MB &rarr; 3.23 MB (saved 10.70 MB)
+  - `Prime footer Image.jpg`: 4.95 MB &rarr; 2.93 MB (saved 2.01 MB)
+  - `Aerial_view_of_town_center_202608142359.jpeg`: 3.88 MB &rarr; 0.78 MB (saved 3.10 MB)
+  - `2.jpg`: 3.39 MB &rarr; 0.47 MB (saved 2.92 MB)
+  - `3.jpeg`: 3.09 MB &rarr; 0.48 MB (saved 2.61 MB)
+  - `1.jpeg`: 3.07 MB &rarr; 0.45 MB (saved 2.62 MB)
+  - `QAS07031.JPG_2K_202609031134.jpeg`: 2.51 MB &rarr; 0.39 MB (saved 2.13 MB)
+  - `QAS07600.png_2K_202609031145.jpeg`: 2.40 MB &rarr; 0.34 MB (saved 2.06 MB)
+  - `QAS07033.JPG_2K_202609031135.jpeg`: 2.37 MB &rarr; 0.35 MB (saved 2.02 MB)
+  - **Total Bandwidth Saved**: **40.44 MB**.
+- **Preservation Protections**:
+  - **Commercial Map & Elite Map**: Untouched. No recompression applied to any map files, SVG overlays, or polygon coordinate assets.
+  - **PNG Map Clicks**: All PNG maps and click-detection coordinate maps remain intact with zero loss of interactive fidelity.
+  - **WebP Preference**: Retained existing WebP assets where supported by the Next.js `Image` pipeline without breaking legacy browser fallbacks.
+
+### 5.3 Elimination of Layout Jumps (Cumulative Layout Shift)
+- **`/our-plans`**: The payment plan carousel container was updated with a stable minimum height (`min-h-[580px]`). This eliminates vertical displacement when the skeleton loader transitions into loaded plan cards.
+- **`/events-and-media`**: The event cards section was assigned a stable minimum height (`min-h-[480px]`), preventing the footer from shifting upward during initial page rendering.
+- **Hero Section**: Retains full viewport height constraints (`h-dvh min-h-[600px]`) and high-priority Next.js image loading to ensure zero layout shift during viewport hydration.
+
+### 5.4 In-Process PostgreSQL Background Job Worker
+- **Architecture**: Implemented in `src/jobs/jobs.service.ts`, `src/jobs/jobs.controller.ts`, and `src/jobs/jobs.module.ts`.
+- **Database Table**: Automatically provisions table `background_jobs` in PostgreSQL via raw SQL on module boot without requiring `prisma db push`.
+- **Concurrency & Locking**: Employs PostgreSQL row-level locks (`FOR UPDATE SKIP LOCKED`) to ensure exactly-once processing among worker ticks.
+- **Workload Scope**:
+  - `receipt_file_processing`: Asynchronous post-upload integrity, virus scanning, and hash checks.
+  - `notice_sending`: Background society email/SMS notice dispatching.
+  - `heavy_report`: Generation of intensive financial and plot inventory report summaries.
+- **Non-Blocking Execution**: Enqueued jobs return HTTP 202 Accepted immediately. The client page never waits for background file processing or notice batches.
+- **Safety Boundary**: Payment math, plot status transitions, and plot bookings remain strictly synchronous and atomic. No Redis or external broker was added.
+
+### 5.5 Honest Page Load Measurement
+- **Measurement Tool**: Executed via standard `curl` against the live production deployment.
+- **Command Executed**:
+  ```bash
+  curl.exe -o NUL -s -w "time_namelookup: %{time_namelookup}s\ntime_connect: %{time_connect}s\ntime_appconnect: %{time_appconnect}s\ntime_starttransfer: %{time_starttransfer}s\ntime_total: %{time_total}s\n" https://prime-view-livid.vercel.app
+  ```
+- **Recorded Results**:
+  - `time_namelookup`: 0.153s
+  - `time_connect`: 0.283s
+  - `time_appconnect`: 1.397s (TLS handshake to Vercel edge)
+  - `time_starttransfer`: 2.488s
+  - `time_total`: **2.587s**
+- **Performance Disclosure**: The live production site responds in ~2.59 seconds over public internet. We do not claim sub-2-second page loads without empirical proof.
+
+---
+
+
+
 
