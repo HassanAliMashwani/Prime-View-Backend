@@ -12,7 +12,21 @@ export interface ScopedSession {
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
-    await this.$connect();
+    let attempts = 0;
+    const maxAttempts = 3;
+    while (attempts < maxAttempts) {
+      try {
+        await this.$connect();
+        break;
+      } catch (err) {
+        attempts++;
+        console.warn(`[PrismaService] Connection attempt ${attempts} failed. Retrying in 2s...`);
+        if (attempts >= maxAttempts) {
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
   }
 
   async onModuleDestroy() {
