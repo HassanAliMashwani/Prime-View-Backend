@@ -92,7 +92,7 @@ export class AuthService {
 
   async adminLogin(username: string, pass: string) {
     if (!username || !pass) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     this.checkAccountBurst(`admin:${username.toLowerCase().trim()}`);
@@ -103,14 +103,14 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     const now = new Date();
     const status = this.calculateEffectiveFailures(user.failedLoginAttempts, user.lockedUntil, now);
 
     if (status.isLocked) {
-      throw new UnauthorizedException('Account locked due to too many failed attempts. Try again later.');
+      throw new UnauthorizedException('Account locked due to too many failed attempts.');
     }
 
     const isMatch = await bcrypt.compare(pass, user.passwordHash);
@@ -129,19 +129,23 @@ export class AuthService {
       });
 
       // Audit log failed login
-      await this.prisma.auditEntry.create({
-        data: {
-          actorId: user.id,
-          actorName: user.fullName,
-          actorRole: user.role,
-          action: 'ADMIN_LOGIN_FAILURE',
-          entityType: 'AdminUser',
-          entityId: user.id,
-          details: `Failed admin login attempt for ${user.username}. Consecutive failure count: ${newCount}`,
-        },
-      });
+      try {
+        await this.prisma.auditEntry.create({
+          data: {
+            actorId: user.id,
+            actorName: user.fullName,
+            actorRole: user.role,
+            action: 'ADMIN_LOGIN_FAILURE',
+            entityType: 'AdminUser',
+            entityId: user.id,
+            details: `Failed admin login attempt for ${user.username}. Consecutive failure count: ${newCount}`,
+          },
+        });
+      } catch {
+        // Drop that failure. Write none of its text into the response, the log, or any database column.
+      }
 
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     // A correct password clears that account’s failures
@@ -153,17 +157,21 @@ export class AuthService {
     }
 
     // Audit log successful login
-    await this.prisma.auditEntry.create({
-      data: {
-        actorId: user.id,
-        actorName: user.fullName,
-        actorRole: user.role,
-        action: 'ADMIN_LOGIN_SUCCESS',
-        entityType: 'AdminUser',
-        entityId: user.id,
-        details: `Admin ${user.username} authenticated successfully.`,
-      },
-    });
+    try {
+      await this.prisma.auditEntry.create({
+        data: {
+          actorId: user.id,
+          actorName: user.fullName,
+          actorRole: user.role,
+          action: 'ADMIN_LOGIN_SUCCESS',
+          entityType: 'AdminUser',
+          entityId: user.id,
+          details: `Admin ${user.username} authenticated successfully.`,
+        },
+      });
+    } catch {
+      // If writing the audit row fails during login, still return the normal login token when the password is correct. Drop that failure. Write none of its text into the response, the log, or any database column.
+    }
 
     const payload = {
       adminId: user.id,
@@ -181,7 +189,7 @@ export class AuthService {
 
   async memberLogin(membershipNo: string, pass: string) {
     if (!membershipNo || !pass) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     this.checkAccountBurst(`member:${membershipNo.toLowerCase().trim()}`);
@@ -191,7 +199,7 @@ export class AuthService {
     });
 
     if (!customer) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     if (customer.accountStatus === 'suspended') {
@@ -202,11 +210,11 @@ export class AuthService {
     const status = this.calculateEffectiveFailures(customer.failedLoginAttempts, customer.lockedUntil, now);
 
     if (status.isLocked) {
-      throw new UnauthorizedException('Account locked due to too many failed attempts. Try again later.');
+      throw new UnauthorizedException('Account locked due to too many failed attempts.');
     }
 
     if (!customer.passwordHash) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     const isMatch = await bcrypt.compare(pass, customer.passwordHash);
@@ -223,19 +231,23 @@ export class AuthService {
       });
 
       // Audit log failed member login
-      await this.prisma.auditEntry.create({
-        data: {
-          actorId: customer.id,
-          actorName: customer.fullName,
-          actorRole: 'customer',
-          action: 'MEMBER_LOGIN_FAILURE',
-          entityType: 'Customer',
-          entityId: customer.id,
-          details: `Failed member login attempt for ${customer.membershipNo}. Consecutive failure count: ${newCount}`,
-        },
-      });
+      try {
+        await this.prisma.auditEntry.create({
+          data: {
+            actorId: customer.id,
+            actorName: customer.fullName,
+            actorRole: 'customer',
+            action: 'MEMBER_LOGIN_FAILURE',
+            entityType: 'Customer',
+            entityId: customer.id,
+            details: `Failed member login attempt for ${customer.membershipNo}. Consecutive failure count: ${newCount}`,
+          },
+        });
+      } catch {
+        // Drop that failure.
+      }
 
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Invalid credentials.');
     }
 
     // A correct password clears that account’s failures
@@ -249,18 +261,21 @@ export class AuthService {
     });
 
     // Audit log successful member login
-    await this.prisma.auditEntry.create({
-      data: {
-        actorId: customer.id,
-        actorName: customer.fullName,
-        actorRole: 'customer',
-        action: 'MEMBER_LOGIN_SUCCESS',
-        entityType: 'Customer',
-        entityId: customer.id,
-        details: `Member ${customer.membershipNo} authenticated successfully.`,
-      },
-    });
-
+    try {
+      await this.prisma.auditEntry.create({
+        data: {
+          actorId: customer.id,
+          actorName: customer.fullName,
+          actorRole: 'customer',
+          action: 'MEMBER_LOGIN_SUCCESS',
+          entityType: 'Customer',
+          entityId: customer.id,
+          details: `Member ${customer.membershipNo} authenticated successfully.`,
+        },
+      });
+    } catch {
+      // If writing the audit row fails during login, still return the normal login token when the password is correct. Drop that failure. Write none of its text into the response, the log, or any database column.
+    }
 
     const payload = {
       customerId: customer.id,
@@ -274,3 +289,4 @@ export class AuthService {
     };
   }
 }
+
