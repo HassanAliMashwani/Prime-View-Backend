@@ -18,7 +18,7 @@ import { SubmitReceiptDto } from './dto/submit-receipt.dto';
 import { VerifyReceiptDto } from './dto/verify-receipt.dto';
 import { RejectReceiptDto } from './dto/reject-receipt.dto';
 import { Public } from '../auth/decorators/public.decorator';
-import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('receipts')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -85,7 +85,6 @@ export class ReceiptsController {
   }
 
   @Public()
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Get('verify/:slipNumber')
   async publicVerifySlip(@Param('slipNumber') slipNumber: string) {
