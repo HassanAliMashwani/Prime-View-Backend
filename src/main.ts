@@ -55,12 +55,42 @@ async function bootstrap() {
   app.useBodyParser('json', { limit: '15mb' });
   app.useBodyParser('urlencoded', { extended: true, limit: '15mb' });
 
-  // Whitelist known origins strictly - no wildcard allowed
+  // Whitelist known origins strictly - no wildcard (*) allowed
+  const rawFrontendUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.trim().replace(/\/$/, '') : undefined;
   const allowedOrigins = [
-    process.env.FRONTEND_URL,
     'https://prime-view-livid.vercel.app',
+    rawFrontendUrl,
     !isProd ? 'http://localhost:3000' : undefined,
   ].filter(Boolean) as string[];
+
+  // Answer OPTIONS with 204 and CORS headers; allow POST and Content-Type
+  app.use((req: any, res: any, next: any) => {
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.some((o) => o === origin || o === origin.replace(/\/$/, ''))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, Origin, X-Requested-With');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    next();
+  });
+
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.some((o) => o === origin || o === origin.replace(/\/$/, ''))) {
+        callback(null, true);
+      } else {
+        callback(null, false);
+      }
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+    credentials: true,
+    optionsSuccessStatus: 204,
+  });
 
   // Global Security Headers & HSTS on API
   app.use((req: any, res: any, next: any) => {
