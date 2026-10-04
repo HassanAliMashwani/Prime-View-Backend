@@ -131,11 +131,15 @@ export class SalesService {
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
       // 3. Pagination
-      const page = Number(filters.page) || 1;
-      const pageSize = Number(filters.pageSize) || 20;
+      const page = Math.max(1, Number(filters.page) || 1);
+      const pageSize = Math.min(Number(filters.pageSize) || 10, 10);
       const offset = (page - 1) * pageSize;
 
       // 4. Single Combined Query
+      const limitParamIdx = paramIdx++;
+      const offsetParamIdx = paramIdx++;
+      params.push(pageSize, offset);
+
       const itemsQuery = `
         SELECT 
           a.id as "auditId",
@@ -162,7 +166,7 @@ export class SalesService {
         JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
         ${whereClause}
         ORDER BY a.timestamp DESC
-        LIMIT ${pageSize} OFFSET ${offset}
+        LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
       `;
 
       const rawItems = await this.prisma.$queryRawUnsafe<any[]>(itemsQuery, ...params);

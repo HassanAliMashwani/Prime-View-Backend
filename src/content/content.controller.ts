@@ -27,9 +27,11 @@ export class ContentController {
   @Public()
   async getContentBlocks(
     @Query('section') section?: 'plans' | 'events',
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
     @CurrentSession() session?: any,
   ) {
-    return this.contentService.getContentBlocks(section, session);
+    return this.contentService.getContentBlocks(section, session, { page, pageSize });
   }
 
 

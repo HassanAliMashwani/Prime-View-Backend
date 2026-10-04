@@ -6,6 +6,7 @@ import {
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -31,13 +32,23 @@ export class AdminController {
   }
 
   @Get('sub-admins')
-  async getSubAdmins(@CurrentSession() session: any) {
-    return this.adminService.getSubAdmins(session);
+  async getSubAdmins(@Query() query: any, @CurrentSession() session: any) {
+    return this.adminService.getSubAdmins(session, query);
   }
 
   @Get('audit')
-  async getAuditLogs(@CurrentSession() session: any) {
-    return this.adminService.getAuditLogs(session);
+  async getAuditLogs(
+    @CurrentSession() session: any,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('search') search?: string,
+    @Query('actorId') actorId?: string,
+    @Query('entityType') entityType?: string,
+    @Query('action') action?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.adminService.getAuditLogs(session, { page, pageSize, search, actorId, entityType, action, startDate, endDate });
   }
 
   @Post('sub-admins')

@@ -68,8 +68,8 @@ export class ContentService {
    * 1. GET /content
    * List all CMS content blocks with optional section filtering ('plans' | 'events').
    */
-  async getContentBlocks(section?: 'plans' | 'events', session?: any) {
-    if (!session) {
+  async getContentBlocks(section?: 'plans' | 'events', session?: any, query?: any) {
+    if (!session && (!query || !query.page)) {
       const cacheKey = section || 'all';
       const cached = this.publicCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.cacheTtlMs) {
@@ -82,17 +82,36 @@ export class ContentService {
       where.section = section as ContentSection;
     }
 
-    const blocks = session
-      ? await this.prisma.withScopedSession(session, async (tx) => {
-          return tx.contentBlock.findMany({
+    const page = Math.max(1, parseInt(query?.page || '1', 10));
+    const pageSize = 10;
+    const skip = (page - 1) * pageSize;
+
+    let blocks;
+    let total;
+
+    if (session) {
+      [blocks, total] = await this.prisma.withScopedSession(session, async (tx) => {
+        return Promise.all([
+          tx.contentBlock.findMany({
             where,
             orderBy: { lastModifiedAt: 'desc' },
-          });
-        })
-      : await this.prisma.contentBlock.findMany({
+            skip,
+            take: pageSize,
+          }),
+          tx.contentBlock.count({ where })
+        ]);
+      });
+    } else {
+      [blocks, total] = await Promise.all([
+        this.prisma.contentBlock.findMany({
           where,
           orderBy: { lastModifiedAt: 'desc' },
-        });
+          skip,
+          take: pageSize,
+        }),
+        this.prisma.contentBlock.count({ where })
+      ]);
+    }
 
     // Check expired locks and enrich with lockedByName
     const now = Date.now();
@@ -152,9 +171,8 @@ export class ContentService {
         };
       }),
     );
-
-    const result = { ok: true, blocks: enriched };
-    if (!session) {
+    const result = { ok: true, blocks: enriched, total, page, pageSize };
+    if (!session && (!query || !query.page)) {
       this.publicCache.set(section || 'all', { timestamp: Date.now(), data: result });
     }
     return result;

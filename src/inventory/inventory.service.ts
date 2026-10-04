@@ -5,7 +5,7 @@ import { PrismaService, ScopedSession } from '../prisma/prisma.service';
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getStats(session: ScopedSession, from?: string, to?: string, blockId?: string) {
+  async getStats(session: ScopedSession, from?: string, to?: string, blockId?: string, query?: any) {
     return this.prisma.withScopedSession(session, async (tx) => {
       const adminUser = await tx.adminUser.findUnique({ where: { id: session.adminId }, include: { assignments: true } });
       
@@ -13,17 +13,26 @@ export class InventoryService {
       if (session.role === 'sub_admin') {
         if (!adminUser) throw new BadRequestException(`Sub-admin user not found in DB (id=${session.adminId})`);
         const assignedBlocks = adminUser.assignments.map(a => a.blockId);
-        if (blockId && !assignedBlocks.includes(blockId)) return [];
+        if (blockId && !assignedBlocks.includes(blockId)) return { ok: true, stats: [], total: 0, page: 1, pageSize: 10 };
         blocksQuery = { id: blockId ? blockId : { in: assignedBlocks } };
       }
 
-      const accessibleBlocks = await tx.block.findMany({
-        where: blocksQuery,
-        select: { id: true, name: true }
-      });
+      const page = Math.max(1, parseInt(query?.page || '1', 10));
+      const pageSize = 10;
+      const skip = (page - 1) * pageSize;
+
+      const [accessibleBlocks, totalBlocks] = await Promise.all([
+        tx.block.findMany({
+          where: blocksQuery,
+          select: { id: true, name: true },
+          skip,
+          take: pageSize,
+        }),
+        tx.block.count({ where: blocksQuery })
+      ]);
 
       const blockIds = accessibleBlocks.map(b => b.id);
-      if (blockIds.length === 0) return [];
+      if (blockIds.length === 0) return { ok: true, stats: [], total: totalBlocks, page, pageSize };
 
       if (!from || !to) {
         // Snapshot Mode: One grouped query by blockId and status without loading every plot into memory
@@ -57,7 +66,7 @@ export class InventoryService {
           else if (row.status === 'disputed') st.disputedTotal += count;
         }
 
-        return Array.from(statsByBlock.values());
+        return { ok: true, stats: Array.from(statsByBlock.values()), total: totalBlocks, page, pageSize };
       }
 
       // Historical Range Mode
@@ -147,7 +156,7 @@ export class InventoryService {
         });
       }
 
-      return results;
+      return { ok: true, stats: results, total: totalBlocks, page, pageSize };
     });
   }
 }

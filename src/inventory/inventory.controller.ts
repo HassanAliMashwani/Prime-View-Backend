@@ -14,6 +14,7 @@ export class InventoryController {
   @RequirePermission('can_view_inventory')
   async getInventoryStats(
     @Req() req: Request,
+    @Query() query: any,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('blockId') blockId?: string,
@@ -28,6 +29,6 @@ export class InventoryController {
       }
     }
 
-    return this.inventoryService.getStats(session, from, to, blockId);
+    return this.inventoryService.getStats(session, from, to, blockId, query);
   }
 }

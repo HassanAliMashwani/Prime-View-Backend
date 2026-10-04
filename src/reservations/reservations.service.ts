@@ -34,6 +34,64 @@ export class ReservationsService {
     return res;
   }
 
+  async findAll(session: any, query: any) {
+    const page = Math.max(1, parseInt(query.page || '1', 10));
+    const pageSize = 10;
+    const skip = (page - 1) * pageSize;
+
+    return this.prisma.withScopedSession(session, async (tx) => {
+      const where: any = {};
+      
+      if (query.status && query.status !== 'all') {
+        where.status = query.status;
+      }
+      
+      if (query.blockId && query.blockId !== 'all') {
+        where.plot = { blockId: query.blockId };
+      }
+      
+      if (query.search) {
+        where.OR = [
+          { customerName: { contains: query.search, mode: 'insensitive' } },
+          { customerPhone: { contains: query.search, mode: 'insensitive' } },
+        ];
+      }
+
+      if (session.role !== 'super_admin' && session.assignedBlocks) {
+        if (!where.plot) where.plot = {};
+        where.plot.blockId = { in: session.assignedBlocks };
+      }
+
+      const [items, total] = await Promise.all([
+        tx.reservation.findMany({
+          where,
+          include: { 
+            plot: {
+              include: {
+                reservations: {
+                  where: { status: 'active' },
+                  select: { id: true }
+                }
+              }
+            }
+          },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: pageSize,
+        }),
+        tx.reservation.count({ where }),
+      ]);
+
+      return {
+        ok: true,
+        items,
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
   async confirm(id: string, session: any) {
     const reservation = await this.getReservationMeta(id, session);
 

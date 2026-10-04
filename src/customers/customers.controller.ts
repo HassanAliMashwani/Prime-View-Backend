@@ -39,9 +39,10 @@ export class CustomersController {
     @Query('search') search?: string,
     @Query('status') status?: string,
   ) {
+    const limit = Math.min(parseInt(pageSize) || 10, 10);
     return this.customersService.findAll(session, {
       page: parseInt(page) || 1,
-      pageSize: parseInt(pageSize) || 20,
+      pageSize: limit,
       search,
       status,
     });

@@ -1,8 +1,10 @@
 import {
   Controller,
   Post,
+  Get,
   Patch,
   Param,
+  Query,
   Body,
   UseGuards,
   HttpCode,
@@ -17,6 +19,11 @@ import { CurrentSession } from '../common/decorators/current-session.decorator';
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
+
+  @Get()
+  async findAll(@Query() query: any, @CurrentSession() session: any) {
+    return this.reservationsService.findAll(session, query);
+  }
 
   @Post(':id/confirm')
   @HttpCode(HttpStatus.OK)

@@ -26,7 +26,7 @@ export class AdminService {
    * GET /admin/audit
    * Retrieve system activity audit logs (Super Admin exclusive).
    */
-  async getAuditLogs(session: any) {
+  async getAuditLogs(session: any, filters?: any) {
     if (session.role !== 'super_admin') {
       throw new ForbiddenException({
         error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
@@ -34,20 +34,54 @@ export class AdminService {
       });
     }
 
+    const where: any = {};
+    if (filters?.actorId) where.actorId = filters.actorId;
+    if (filters?.entityType) where.entityType = filters.entityType;
+    if (filters?.action) where.action = filters.action;
+    
+    if (filters?.startDate || filters?.endDate) {
+      where.timestamp = {};
+      if (filters?.startDate) where.timestamp.gte = new Date(filters.startDate);
+      if (filters?.endDate) {
+        const end = new Date(filters.endDate);
+        end.setDate(end.getDate() + 1);
+        where.timestamp.lt = end;
+      }
+    }
+
+    if (filters?.search) {
+      where.OR = [
+        { details: { contains: filters.search, mode: 'insensitive' } },
+        { actorName: { contains: filters.search, mode: 'insensitive' } },
+        { action: { contains: filters.search, mode: 'insensitive' } },
+        { entityId: { contains: filters.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const parsedPageSize = Math.min(Number(filters?.pageSize) || 10, 10);
+    const parsedPage = Math.max(1, Number(filters?.page) || 1);
+    const skip = Math.max(0, (parsedPage - 1) * parsedPageSize);
+    const take = parsedPageSize;
+
+    let totalCount = 0;
     const logs = await this.prisma.withScopedSession(session, async (tx) => {
+      totalCount = await tx.auditEntry.count({ where });
       return tx.auditEntry.findMany({
+        where,
+        skip,
+        take,
         orderBy: { timestamp: 'desc' },
       });
     });
 
-    return { ok: true, logs, totalCount: logs.length };
+    return { ok: true, logs, totalCount, page: parsedPage, pageSize: parsedPageSize };
   }
 
   /**
    * 1. GET /admin/sub-admins
    * Retrieve all Sub Administrators (Super Admin exclusive).
    */
-  async getSubAdmins(session: any) {
+  async getSubAdmins(session: any, query: any) {
     if (session.role !== 'super_admin') {
       throw new ForbiddenException({
         error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
@@ -55,25 +89,43 @@ export class AdminService {
       });
     }
 
-    const subAdmins = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.adminUser.findMany({
-        where: { role: 'sub_admin' },
-        select: {
-          id: true,
-          username: true,
-          email: true,
-          fullName: true,
-          role: true,
-          status: true,
-          permissions: true,
-          createdDate: true,
-          lastLogin: true,
-          assignments: {
-            select: { blockId: true },
+    const page = Math.max(1, parseInt(query.page || '1', 10));
+    const pageSize = 10;
+    const skip = (page - 1) * pageSize;
+    const where: any = { role: 'sub_admin' };
+
+    if (query.search) {
+      where.OR = [
+        { fullName: { contains: query.search, mode: 'insensitive' } },
+        { username: { contains: query.search, mode: 'insensitive' } },
+        { email: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [subAdmins, total] = await this.prisma.withScopedSession(session, async (tx) => {
+      return Promise.all([
+        tx.adminUser.findMany({
+          where,
+          select: {
+            id: true,
+            username: true,
+            email: true,
+            fullName: true,
+            role: true,
+            status: true,
+            permissions: true,
+            createdDate: true,
+            lastLogin: true,
+            assignments: {
+              select: { blockId: true },
+            },
           },
-        },
-        orderBy: { createdDate: 'asc' },
-      });
+          orderBy: { createdDate: 'asc' },
+          skip,
+          take: pageSize,
+        }),
+        tx.adminUser.count({ where }),
+      ]);
     });
 
     const formatted = subAdmins.map((u) => ({
@@ -81,7 +133,13 @@ export class AdminService {
       assignedBlocks: u.assignments.map((a) => a.blockId),
     }));
 
-    return { ok: true, subAdmins: formatted };
+    return { 
+      ok: true, 
+      subAdmins: formatted,
+      total,
+      page,
+      pageSize,
+    };
   }
 
   /**
