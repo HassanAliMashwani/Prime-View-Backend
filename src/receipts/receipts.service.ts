@@ -375,7 +375,7 @@ export class ReceiptsService {
    * 2. GET /receipts
    * Admin queue of receipts, block-scoped for sub-admins, enriched with strikes.
    */
-  async getAdminReceipts(statusFilter: string | undefined, session: any, page: number = 1, pageSize: number = 10) {
+  async getAdminReceipts(statusFilter: string | undefined, search: string | undefined, session: any, page: number = 1, pageSize: number = 10) {
     const isSuper = session.role === 'super_admin';
     const hasAuth = Boolean(session.permissions?.can_verify_receipts);
 
@@ -389,6 +389,16 @@ export class ReceiptsService {
     const where: any = {};
     if (statusFilter && statusFilter !== 'all') {
       where.status = statusFilter as ReceiptStatus;
+    }
+    if (search) {
+      where.OR = [
+        { customer: { fullName: { contains: search, mode: 'insensitive' } } },
+        { customer: { membershipNo: { contains: search, mode: 'insensitive' } } },
+        { bankName: { contains: search, mode: 'insensitive' } },
+        { transactionReference: { contains: search, mode: 'insensitive' } },
+        { slipNumber: { contains: search, mode: 'insensitive' } },
+        { booking: { plot: { plotNumber: { contains: search, mode: 'insensitive' } } } }
+      ];
     }
 
     const parsedPageSize = Math.min(Number(pageSize) || 10, 10);
