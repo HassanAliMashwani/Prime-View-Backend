@@ -101,6 +101,9 @@ export class AdminService {
         { email: { contains: query.search, mode: 'insensitive' } },
       ];
     }
+    if (query.status && query.status !== 'all') {
+      where.status = query.status.toLowerCase();
+    }
 
     const [subAdmins, total] = await this.prisma.withScopedSession(session, async (tx) => {
       return Promise.all([
