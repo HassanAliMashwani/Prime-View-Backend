@@ -85,9 +85,8 @@ export class InventoryService {
           p."blockId",
           COUNT(DISTINCT CASE WHEN psh."toStatus" = 'booked' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as booked,
           COUNT(DISTINCT CASE WHEN psh."toStatus" = 'allotted' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as allotted,
-          COUNT(DISTINCT CASE WHEN psh."toStatus" = 'reserved' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as reserved,
-          SUM(CASE WHEN latest."toStatus" = 'available' THEN 1 ELSE 0 END) as available,
-          SUM(CASE WHEN latest."toStatus" = 'disputed' THEN 1 ELSE 0 END) as disputed
+          COUNT(DISTINCT CASE WHEN latest."toStatus" = 'available' THEN p."id" END) as available,
+          COUNT(DISTINCT CASE WHEN latest."toStatus" = 'disputed' THEN p."id" END) as disputed
         FROM "Plot" p
         LEFT JOIN "PlotStatusHistory" psh ON psh."plotId" = p."id"
         LEFT JOIN (
