@@ -880,6 +880,13 @@ export class PlotsService {
       });
     }
 
+    if (dto.isAdjustment && plot.category !== 'residential' && plot.category !== 'commercial') {
+      throw new BadRequestException({
+        error: 'INVALID_ADJUSTMENT_CATEGORY',
+        message: 'Only residential and commercial plots can be put into adjustment.',
+      });
+    }
+
     const now = new Date();
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       const updatedPlot = await tx.plot.update({
