@@ -190,6 +190,7 @@ export class CustomersService {
         case 'strikes':
           whereClause.strikeCount = { gt: 0 };
           break;
+      }
     }
 
     if (query.search) {
