@@ -43,7 +43,11 @@ export class ReservationsService {
       const where: any = {};
       
       if (query.status && query.status !== 'all') {
-        where.status = query.status;
+        if (query.status === 'history') {
+          where.status = { not: 'active' };
+        } else {
+          where.status = query.status;
+        }
       }
       
       if (query.blockId && query.blockId !== 'all') {

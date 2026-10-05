@@ -394,10 +394,9 @@ export class ReceiptsService {
       where.OR = [
         { customer: { fullName: { contains: search, mode: 'insensitive' } } },
         { customer: { membershipNo: { contains: search, mode: 'insensitive' } } },
-        { bankName: { contains: search, mode: 'insensitive' } },
-        { transactionReference: { contains: search, mode: 'insensitive' } },
-        { slipNumber: { contains: search, mode: 'insensitive' } },
-        { booking: { plot: { plotNumber: { contains: search, mode: 'insensitive' } } } }
+        { depositoryBank: { contains: search, mode: 'insensitive' } },
+        { transactionRef: { contains: search, mode: 'insensitive' } },
+        { slipNumber: { contains: search, mode: 'insensitive' } }
       ];
     }
 

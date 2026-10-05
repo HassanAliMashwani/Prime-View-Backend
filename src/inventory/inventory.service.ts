@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService, ScopedSession } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class InventoryService {
@@ -77,82 +78,38 @@ export class InventoryService {
       toEnd.setHours(23, 59, 59, 999); // End of day
 
       const results = [];
+      const blockIdsArray = accessibleBlocks.map(b => b.id);
+      
+      const statsRes = await tx.$queryRaw<any[]>`
+        SELECT
+          p."blockId",
+          COUNT(DISTINCT CASE WHEN psh."toStatus" = 'booked' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as booked,
+          COUNT(DISTINCT CASE WHEN psh."toStatus" = 'allotted' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as allotted,
+          COUNT(DISTINCT CASE WHEN psh."toStatus" = 'reserved' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as reserved,
+          SUM(CASE WHEN latest."toStatus" = 'available' THEN 1 ELSE 0 END) as available,
+          SUM(CASE WHEN latest."toStatus" = 'disputed' THEN 1 ELSE 0 END) as disputed
+        FROM "Plot" p
+        LEFT JOIN "PlotStatusHistory" psh ON psh."plotId" = p."id"
+        LEFT JOIN (
+          SELECT "plotId", "toStatus",
+                 ROW_NUMBER() OVER(PARTITION BY "plotId" ORDER BY "changedAt" DESC) as rn
+          FROM "PlotStatusHistory"
+          WHERE "changedAt" <= ${toEnd}
+        ) latest ON latest."plotId" = p."id" AND latest.rn = 1
+        WHERE p."blockId" IN (${Prisma.join(blockIdsArray)})
+        GROUP BY p."blockId"
+      `;
 
       for (const block of accessibleBlocks) {
-        // Booked
-        const bookedRes = await tx.$queryRaw<{count: bigint}[]>`
-          SELECT COUNT(DISTINCT "plotId") as count
-          FROM "PlotStatusHistory" psh
-          JOIN "Plot" p ON psh."plotId" = p."id"
-          WHERE p."blockId" = ${block.id}
-            AND psh."toStatus" = 'booked'
-            AND psh."changedAt" >= ${fromStart}
-            AND psh."changedAt" <= ${toEnd}
-        `;
-        const booked = Number(bookedRes[0]?.count || 0);
-
-        // Allotted
-        const allottedRes = await tx.$queryRaw<{count: bigint}[]>`
-          SELECT COUNT(DISTINCT "plotId") as count
-          FROM "PlotStatusHistory" psh
-          JOIN "Plot" p ON psh."plotId" = p."id"
-          WHERE p."blockId" = ${block.id}
-            AND psh."toStatus" = 'allotted'
-            AND psh."changedAt" >= ${fromStart}
-            AND psh."changedAt" <= ${toEnd}
-        `;
-        const allotted = Number(allottedRes[0]?.count || 0);
-
-        // Reserved
-        const reservedRes = await tx.$queryRaw<{count: bigint}[]>`
-          SELECT COUNT(DISTINCT "plotId") as count
-          FROM "PlotStatusHistory" psh
-          JOIN "Plot" p ON psh."plotId" = p."id"
-          WHERE p."blockId" = ${block.id}
-            AND psh."toStatus" = 'reserved'
-            AND psh."changedAt" >= ${fromStart}
-            AND psh."changedAt" <= ${toEnd}
-        `;
-        const reserved = Number(reservedRes[0]?.count || 0);
-
-        // Available as of toEnd
-        const availableRes = await tx.$queryRaw<{count: bigint}[]>`
-          SELECT COUNT(*) as count
-          FROM (
-            SELECT psh."plotId", psh."toStatus",
-                   ROW_NUMBER() OVER(PARTITION BY psh."plotId" ORDER BY psh."changedAt" DESC) as rn
-            FROM "PlotStatusHistory" psh
-            JOIN "Plot" p ON psh."plotId" = p."id"
-            WHERE p."blockId" = ${block.id}
-              AND psh."changedAt" <= ${toEnd}
-          ) sub
-          WHERE rn = 1 AND "toStatus" = 'available'
-        `;
-        const available = Number(availableRes[0]?.count || 0);
-
-        // Disputed as of toEnd
-        const disputedRes = await tx.$queryRaw<{count: bigint}[]>`
-          SELECT COUNT(*) as count
-          FROM (
-            SELECT psh."plotId", psh."toStatus",
-                   ROW_NUMBER() OVER(PARTITION BY psh."plotId" ORDER BY psh."changedAt" DESC) as rn
-            FROM "PlotStatusHistory" psh
-            JOIN "Plot" p ON psh."plotId" = p."id"
-            WHERE p."blockId" = ${block.id}
-              AND psh."changedAt" <= ${toEnd}
-          ) sub
-          WHERE rn = 1 AND "toStatus" = 'disputed'
-        `;
-        const disputedTotal = Number(disputedRes[0]?.count || 0);
-
+        const row = statsRes.find(r => r.blockId === block.id);
         results.push({
           blockId: block.id,
           blockName: block.name,
-          booked,
-          allotted,
-          reserved,
-          available,
-          disputedTotal,
+          booked: Number(row?.booked || 0),
+          allotted: Number(row?.allotted || 0),
+          reserved: Number(row?.reserved || 0),
+          available: Number(row?.available || 0),
+          disputedTotal: Number(row?.disputed || 0),
         });
       }
 
