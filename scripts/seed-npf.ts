@@ -9,7 +9,6 @@ const prisma = new PrismaClient({
 const RESIDENTIAL_RANGES = [[1, 44], [82, 218], [220, 233], [235, 245], [248, 253]];
 const COMMERCIAL_RANGES = [[46, 73]];
 const AMENITY_NAMES: Record<number, string> = {
-  4: 'Graveyard',
   45: 'Commercial Park',
   74: 'Apartment Block',
   75: 'Community Park',
