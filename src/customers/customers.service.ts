@@ -203,6 +203,8 @@ export class CustomersService {
         { cnic: { contains: s, mode: 'insensitive' } },
         { phone: { contains: s, mode: 'insensitive' } },
         { email: { contains: s, mode: 'insensitive' } },
+        { bookings: { some: { plot: { plotNumber: { contains: s, mode: 'insensitive' } } } } },
+        { bookings: { some: { plot: { blockId: { contains: s, mode: 'insensitive' } } } } }
       ];
     }
 
