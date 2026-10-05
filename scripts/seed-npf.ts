@@ -6,7 +6,7 @@ const prisma = new PrismaClient({
   datasources: { db: { url: process.env.DIRECT_URL || process.env.DATABASE_URL } }
 });
 
-const RESIDENTIAL_RANGES = [[1, 44], [82, 218], [220, 233], [235, 245], [248, 253]];
+const RESIDENTIAL_RANGES = [[1, 44], [82, 218], [220, 233], [235, 246], [248, 253]];
 const COMMERCIAL_RANGES = [[46, 73]];
 const AMENITY_NAMES: Record<number, string> = {
   45: 'Commercial Park',
