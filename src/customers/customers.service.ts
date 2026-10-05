@@ -176,7 +176,23 @@ export class CustomersService {
     }
 
     if (query.status && query.status !== 'all') {
-      whereClause.registrationStatus = query.status;
+      switch (query.status.toLowerCase()) {
+        case 'needs_registration':
+          whereClause.registrationStatus = 'minimal';
+          break;
+        case 'active':
+          whereClause.accountStatus = 'active';
+          whereClause.registrationStatus = 'complete';
+          break;
+        case 'suspended':
+          whereClause.accountStatus = 'suspended';
+          break;
+        case 'strikes':
+          whereClause.strikes = { gt: 0 };
+          break;
+        default:
+          whereClause.registrationStatus = query.status; // fallback
+      }
     }
 
     if (query.search) {
