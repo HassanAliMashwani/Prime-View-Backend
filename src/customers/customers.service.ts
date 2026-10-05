@@ -188,11 +188,8 @@ export class CustomersService {
           whereClause.accountStatus = 'suspended';
           break;
         case 'strikes':
-          whereClause.strikes = { gt: 0 };
+          whereClause.strikeCount = { gt: 0 };
           break;
-        default:
-          whereClause.registrationStatus = query.status; // fallback
-      }
     }
 
     if (query.search) {
