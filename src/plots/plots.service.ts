@@ -54,6 +54,14 @@ export class PlotsService {
           currentOwner: {
             select: {
               id: true,
+              fullName: true,
+              phone: true,
+              email: true,
+              cnic: true,
+              city: true,
+              mailingAddress: true,
+              membershipNo: true,
+              registrationStatus: true,
               accountStatus: true,
             },
           },
@@ -85,23 +93,50 @@ export class PlotsService {
   }
 
   async findOne(id: string, session: any) {
-    await this.getPlotWithScopeCheck(id, session);
-
     return this.prisma.withScopedSession(session, async (tx) => {
       const plot = await tx.plot.findUnique({
         where: { id },
         include: {
           reservations: true,
+          bookings: {
+            select: {
+              id: true,
+              plotId: true,
+              customerId: true,
+              paymentType: true,
+              status: true,
+              bookingDate: true,
+            },
+          },
           currentOwner: {
             select: {
               id: true,
+              fullName: true,
+              phone: true,
+              email: true,
+              cnic: true,
+              city: true,
+              mailingAddress: true,
+              membershipNo: true,
+              registrationStatus: true,
               accountStatus: true,
             },
           },
         },
       });
 
-      if (!plot) return null;
+      if (!plot) {
+        throw new NotFoundException({ error: 'PLOT_NOT_FOUND', reason: 'PLOT_NOT_FOUND', message: 'Plot not found' });
+      }
+
+      if (session.role !== 'super_admin' && !session.assignedBlocks?.includes(plot.blockId)) {
+        throw new ForbiddenException({
+          error: 'OUT_OF_SCOPE',
+          reason: 'OUT_OF_SCOPE',
+          message: 'You do not have access to this block',
+        });
+      }
+
       return attachDisplayStatus(plot);
     });
   }
