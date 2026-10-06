@@ -51,6 +51,16 @@ export class PlotsService {
         take: search ? 20 : undefined,
         include: {
           reservations: true,
+          bookings: {
+            select: {
+              id: true,
+              plotId: true,
+              customerId: true,
+              paymentType: true,
+              status: true,
+              bookingDate: true,
+            },
+          },
           currentOwner: {
             select: {
               id: true,
