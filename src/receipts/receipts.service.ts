@@ -424,7 +424,23 @@ export class ReceiptsService {
         where,
         skip,
         take,
-        include: {
+        select: {
+          id: true,
+          customerId: true,
+          bookingId: true,
+          paymentRecordId: true,
+          depositoryBank: true,
+          transactionRef: true,
+          paymentDate: true,
+          amount: true,
+          paymentKind: true,
+          status: true,
+          verifiedByAdminId: true,
+          verifiedAt: true,
+          rejectionReason: true,
+          slipNumber: true,
+          securityHash: true,
+          uploadedAt: true,
           customer: {
             select: {
               id: true,
@@ -433,14 +449,22 @@ export class ReceiptsService {
               phone: true,
               cnic: true,
               strikeCount: true,
-              strikes: {
-                orderBy: { assignedAt: 'desc' },
-              },
             },
           },
         },
         orderBy: { uploadedAt: 'desc' },
       });
+
+      const receiptIds = receipts.map((r) => r.id);
+      let photoMap = new Map<string, boolean>();
+      if (receiptIds.length > 0) {
+        const photoRows = await tx.$queryRaw<Array<{ id: string; hasPhoto: boolean }>>`
+          SELECT id, ("receiptFileUrl" IS NOT NULL AND "receiptFileUrl" <> '') as "hasPhoto"
+          FROM "ReceiptSubmission"
+          WHERE id = ANY(${receiptIds})
+        `;
+        photoMap = new Map(photoRows.map((p) => [p.id, Boolean(p.hasPhoto)]));
+      }
 
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
@@ -461,11 +485,9 @@ export class ReceiptsService {
         const plotNumber = booking?.plot?.plotNumber || '';
         const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
 
-        const { receiptFileUrl: _ignoredPhoto, ...cleanR } = r;
-
         return {
-          ...cleanR,
-          hasPhoto: Boolean(r.receiptFileUrl),
+          ...r,
+          hasPhoto: photoMap.get(r.id) ?? false,
           receiptFileUrl: undefined,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           customerName: r.customer?.fullName || '',
@@ -473,7 +495,7 @@ export class ReceiptsService {
           customerPhone: r.customer?.phone,
           customerCnic: r.customer?.cnic,
           customerStrikeCount: r.customer?.strikeCount || 0,
-          customerStrikeHistory: r.customer?.strikes || [],
+          customerStrikeHistory: [],
           plotId: booking?.plot?.id,
           plotNumber,
           blockName,
