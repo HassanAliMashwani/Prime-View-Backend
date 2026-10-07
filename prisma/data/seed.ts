@@ -31,13 +31,6 @@ export const initialBlocks: Block[] = [
     amenities: ['Park', 'Play Ground'],
   },
   {
-    id: 'chalet',
-    name: 'Chalet Block',
-    description: 'Alpine-themed cottages and resort-style hillside residential plots.',
-    totalPlots: 260,
-    amenities: ['Play Ground', 'Community Mosque'],
-  },
-  {
     id: 'commercial',
     name: 'Commercial Block',
     description: 'Main boulevard commercial hub for corporate offices, retail and food boulevards.',
@@ -191,7 +184,7 @@ export const initialAdminUsers: AdminUser[] = [
     fullName: 'Inspector Kamran Qureshi (Police Liaison)',
     email: 'police.liaison@primeview.pk',
     role: 'sub_admin',
-    assignedBlocks: ['overseas', 'elite', 'chalet'],
+    assignedBlocks: ['overseas', 'elite'],
     permissions: { can_reserve: true, can_book: true, can_create_customer: false, can_edit_content: false },
     status: 'active',
     passwordHash: 'admin123',
@@ -488,70 +481,6 @@ export const initialPlots: Plot[] = [
 
   // ── ELITE BLOCK (Full Real Coverage: 183 Traced Plots & Amenities) ──
   ...eliteSeedPlots,
-
-  // ── CHALET BLOCK ──
-  {
-    id: 'plot-ch-01',
-    blockId: 'chalet',
-    plotNumber: 'CH-01',
-    size: '10 Marla',
-    category: 'residential',
-    plotType: '10_marla',
-    price: 7500000,
-    status: 'available',
-  },
-  {
-    id: 'plot-ch-02',
-    blockId: 'chalet',
-    plotNumber: 'CH-02',
-    size: '10 Marla',
-    category: 'residential',
-    plotType: '10_marla',
-    price: 7500000,
-    status: 'available',
-  },
-  {
-    id: 'plot-ch-03',
-    blockId: 'chalet',
-    plotNumber: 'CH-03',
-    size: '1 Kanal',
-    category: 'residential',
-    plotType: '1_kanal',
-    price: 14000000,
-    status: 'available',
-  },
-  {
-    id: 'plot-ch-04',
-    blockId: 'chalet',
-    plotNumber: 'CH-04',
-    size: '10 Marla',
-    category: 'residential',
-    plotType: '10_marla',
-    price: 7500000,
-    status: 'available',
-  },
-  {
-    id: 'plot-amn-pg-ch',
-    blockId: 'chalet',
-    plotNumber: 'AMN-G02',
-    size: '3 Kanal',
-    category: 'amenity',
-    plotType: 'amenity_playground',
-    price: 0,
-    status: 'available',
-    amenityName: 'Play Ground',
-  },
-  {
-    id: 'plot-amn-mosq-ch',
-    blockId: 'chalet',
-    plotNumber: 'AMN-M03',
-    size: '2 Kanal',
-    category: 'amenity',
-    plotType: 'amenity_mosque',
-    price: 0,
-    status: 'available',
-    amenityName: 'Community Mosque',
-  },
 
   // ── COMMERCIAL BLOCK ──
   {

@@ -349,6 +349,13 @@ export class CustomersService {
 
     const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
 
+    if (Number(plot.price) <= 0) {
+      throw new BadRequestException({
+        error: 'PRICE_NOT_SET',
+        message: 'Plot has an official price of 0 and cannot be booked',
+      });
+    }
+
     const now = new Date();
     const customerId = `cust-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;

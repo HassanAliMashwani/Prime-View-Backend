@@ -1074,6 +1074,11 @@ export class ReceiptsService {
           amount: receipt.amount,
           paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
           status: receipt.status,
+          securityHash: receipt.securityHash || null,
+          depositoryBank: receipt.depositoryBank || null,
+          bankName: receipt.depositoryBank || null,
+          transactionRef: receipt.transactionRef || null,
+          verifiedAt: receipt.verifiedAt ? (receipt.verifiedAt instanceof Date ? receipt.verifiedAt.toISOString().split('T')[0] : String(receipt.verifiedAt).split('T')[0]) : null,
         };
       }
     );

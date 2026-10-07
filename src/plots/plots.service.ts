@@ -187,6 +187,13 @@ export class PlotsService {
         });
       }
 
+      if (Number(plot.price) <= 0) {
+        throw new BadRequestException({
+          error: 'PRICE_NOT_SET',
+          message: 'Plot has an official price of 0 and cannot be locked or booked',
+        });
+      }
+
       if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
         throw new ConflictException({
           error: 'PLOT_NOT_AVAILABLE',

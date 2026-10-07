@@ -25,7 +25,6 @@ export type BlockId =
   | 'royal'
   | 'overseas'
   | 'elite'
-  | 'chalet'
   | 'commercial'
   | 'npf-phase-1'
   | 'npf-phase-2';
