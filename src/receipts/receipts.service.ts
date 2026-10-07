@@ -173,7 +173,17 @@ export class ReceiptsService {
           ? trimmedUrl.split('receipts:')[1]
           : trimmedUrl.split('/receipts/')[1] || trimmedUrl;
         const cleanKey = rawKey.split('?')[0].trim();
-        const fileCheck = await this.storageService.verifyUploadedObject('receipts', cleanKey, 'image/jpeg');
+        const dotIdx = cleanKey.lastIndexOf('.');
+        const ext = dotIdx > 0 ? cleanKey.substring(dotIdx + 1).toLowerCase() : 'jpg';
+        const EXT_TO_MIME: Record<string, string> = {
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          png: 'image/png',
+          webp: 'image/webp',
+          pdf: 'application/pdf',
+        };
+        const expectedMime = EXT_TO_MIME[ext] || 'image/jpeg';
+        const fileCheck = await this.storageService.verifyUploadedObject('receipts', cleanKey, expectedMime);
         if (!fileCheck.valid) {
           throw new BadRequestException({
             error: fileCheck.error || 'INVALID_UPLOADED_FILE',
@@ -323,7 +333,9 @@ export class ReceiptsService {
           amount: dto.amount,
           paymentKind: paymentKind,
           previewData: previewData,
-          receiptFileUrl: dto.receiptFileUrl.trim(),
+          receiptFileUrl: (dto.receiptFileUrl.includes('receipts:')
+            ? dto.receiptFileUrl.split('receipts:')[1]
+            : dto.receiptFileUrl.split('/receipts/')[1] || dto.receiptFileUrl).split('?')[0].trim(),
           status: 'pending',
           uploadedAt: now,
         },
@@ -449,8 +461,12 @@ export class ReceiptsService {
         const plotNumber = booking?.plot?.plotNumber || '';
         const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
 
+        const { receiptFileUrl: _ignoredPhoto, ...cleanR } = r;
+
         return {
-          ...r,
+          ...cleanR,
+          hasPhoto: Boolean(r.receiptFileUrl),
+          receiptFileUrl: undefined,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           customerName: r.customer?.fullName || '',
           membershipNo: r.customer?.membershipNo || '',
@@ -619,6 +635,79 @@ export class ReceiptsService {
         allocations: enrichedAllocations,
         remainingUnallocated: (res as any).remainingUnallocated ?? 0,
       },
+    };
+  }
+
+  /**
+   * GET /receipts/:id/file
+   * Fetches the receipt file URL / signed URL on demand when admin clicks "View Bank Slip Image".
+   */
+  async getReceiptFile(id: string, session: any) {
+    const isSuper = session.role === 'super_admin';
+    const hasAuth = Boolean(session.permissions?.can_verify_receipts);
+
+    if (!isSuper && !hasAuth && session.role !== 'customer') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have Receipt Verification Authority to view slip files.',
+      });
+    }
+
+    const receipt = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.receiptSubmission.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          receiptFileUrl: true,
+          customerId: true,
+        },
+      });
+    });
+
+    if (!receipt) {
+      throw new NotFoundException({
+        error: 'RECEIPT_NOT_FOUND',
+        message: 'Receipt submission not found.',
+      });
+    }
+
+    if (session.role === 'customer' && receipt.customerId !== session.customerId) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'Access denied to this receipt file.',
+      });
+    }
+
+    let viewUrl = receipt.receiptFileUrl;
+    if (!viewUrl) {
+      throw new NotFoundException({
+        error: 'FILE_NOT_FOUND',
+        message: 'No file attached to this receipt.',
+      });
+    }
+
+    // If viewUrl is a storage key or bucket reference, generate a signed view URL for the private bucket
+    if (!viewUrl.startsWith('data:') && !viewUrl.startsWith('http://') && !viewUrl.startsWith('https://')) {
+      const rawKey = viewUrl.includes('receipts:')
+        ? viewUrl.split('receipts:')[1]
+        : viewUrl.split('/receipts/')[1] || viewUrl;
+      const cleanKey = rawKey.split('?')[0].trim();
+      try {
+        const signed = await this.storageService.generateSignedViewUrl({
+          bucket: 'receipts',
+          key: cleanKey,
+        });
+        if (signed?.viewUrl) {
+          viewUrl = signed.viewUrl;
+        }
+      } catch {
+        // Fallback to existing viewUrl
+      }
+    }
+
+    return {
+      ok: true,
+      receiptFileUrl: viewUrl,
     };
   }
 

@@ -7,39 +7,32 @@ export class TypedErrorFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
 
-    // Log one line only: request failed
-    console.error('request failed');
+    // Log actual exception
+    console.error('ACTUAL EXCEPTION:', exception);
 
     const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.';
 
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
-      let message = '';
+      let message: any = '';
 
       if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
-        message = (exceptionResponse as any).message || '';
+        message = (exceptionResponse as any).message || (exceptionResponse as any).error || '';
       } else if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
       }
 
-      if (message === 'Invalid credentials.' || message === 'Invalid credentials') {
-        return response.status(status).json({
-          message: 'Invalid credentials.',
-        });
-      }
+      const formattedMessage = Array.isArray(message) ? message.join(', ') : (message || exception.message);
 
-      if (
-        message === 'Account locked due to too many failed attempts.' ||
-        message.startsWith('Account locked due to too many failed attempts')
-      ) {
-        return response.status(status).json({
-          message: 'Account locked due to too many failed attempts.',
-        });
-      }
+      return response.status(status).json({
+        statusCode: status,
+        message: formattedMessage,
+      });
     }
 
     return response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
+      statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
       message: GENERIC_ERROR_MESSAGE,
     });
   }

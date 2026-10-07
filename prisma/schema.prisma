@@ -318,6 +318,7 @@ model ReceiptSubmission {
   allocations       PaymentAllocation[]
 
   @@index([customerId, status])
+  @@index([status, uploadedAt])
 }
 
 model PaymentAllocation {

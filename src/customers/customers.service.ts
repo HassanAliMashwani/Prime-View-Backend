@@ -64,6 +64,13 @@ export class CustomersService {
       }
     }
 
+    if (Number(plot.price) <= 0) {
+      throw new BadRequestException({
+        error: 'PRICE_NOT_SET',
+        message: 'Plot has an official price of 0 and cannot be booked.',
+      });
+    }
+
     if (plot.category === 'amenity') {
       throw new BadRequestException({
         error: 'AMENITY_NOT_SELLABLE',
@@ -248,10 +255,16 @@ export class CustomersService {
         let plotCount = 0;
         let totalPaid = 0;
         let outstandingTotal = 0;
+        const plots: { plotId: string; blockId: string; plotNumber: string }[] = [];
 
         c.bookings.forEach(b => {
           if (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId))) {
             plotCount++;
+            plots.push({
+              plotId: b.plot.id,
+              blockId: b.plot.blockId,
+              plotNumber: b.plot.plotNumber,
+            });
             const price = Number(b.plot.price || 0);
             const paid = b.payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
             totalPaid += paid;
@@ -271,6 +284,7 @@ export class CustomersService {
           credentialsPending: c.credentialsPending,
           strikeCount: c._count.strikes,
           plotCount,
+          plots,
           totalPaid,
           outstandingTotal
         };
@@ -2027,9 +2041,21 @@ export class CustomersService {
     // Refuse live plots: any booking whose plot.status is booked or allotted
     for (const booking of customer.bookings) {
       if (booking.plot && (booking.plot.status === 'booked' || booking.plot.status === 'allotted')) {
-        throw new ConflictException({
+        throw new BadRequestException({
           error: 'CUSTOMER_HAS_LIVE_PLOTS',
-          message: 'Void or reassign live plots before deleting this member.',
+          message: 'Member has a booked or allotted plot and cannot be deleted.',
+        });
+      }
+    }
+
+    const ownedPlots = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.plot.findMany({ where: { currentOwnerId: id } });
+    });
+    for (const plot of ownedPlots) {
+      if (plot.status === 'booked' || plot.status === 'allotted') {
+        throw new BadRequestException({
+          error: 'CUSTOMER_HAS_LIVE_PLOTS',
+          message: 'Member has a booked or allotted plot and cannot be deleted.',
         });
       }
     }
@@ -2038,9 +2064,9 @@ export class CustomersService {
     for (const booking of customer.bookings) {
       for (const payment of booking.payments) {
         if (payment.status === 'paid' || Number(payment.paidAmount) > 0) {
-          throw new ConflictException({
+          throw new BadRequestException({
             error: 'CUSTOMER_HAS_LEDGER',
-            message: 'This member has payment history and cannot be deleted.',
+            message: 'Member has verified payments and cannot be deleted.',
           });
         }
       }
@@ -2048,9 +2074,9 @@ export class CustomersService {
 
     for (const receipt of customer.receipts) {
       if (receipt.status === 'verified') {
-        throw new ConflictException({
+        throw new BadRequestException({
           error: 'CUSTOMER_HAS_LEDGER',
-          message: 'This member has payment history and cannot be deleted.',
+          message: 'Member has verified payments and cannot be deleted.',
         });
       }
     }

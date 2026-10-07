@@ -66,6 +66,14 @@ export class ReceiptsController {
     return this.receiptsService.getBalloonPreview(bookingId, plotId, amount, session);
   }
 
+  @Get(':id/file')
+  async getReceiptFile(
+    @Param('id') id: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.getReceiptFile(id, session);
+  }
+
   @Post(':id/verify')
   @HttpCode(HttpStatus.OK)
   async verifyReceipt(

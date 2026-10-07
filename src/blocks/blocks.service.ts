@@ -16,8 +16,8 @@ export class BlocksService {
 
     const whereClause =
       role === 'super_admin'
-        ? Prisma.empty
-        : Prisma.sql`WHERE b.id IN (${Prisma.join(assignedBlocks)})`;
+        ? Prisma.sql`WHERE b.id != 'chalet'`
+        : Prisma.sql`WHERE b.id IN (${Prisma.join(assignedBlocks)}) AND b.id != 'chalet'`;
 
     return this.prisma.withScopedSession(session, async (tx) => {
       const blocks = await tx.$queryRaw<
@@ -56,31 +56,16 @@ export class BlocksService {
         ORDER BY b.id ASC
       `;
 
-const MASTER_PLAN_TOTAL_PLOTS: Record<string, number> = {
-  elite: 254,
-  commercial: 108,
-  overseas: 293,
-  abbott: 467,
-  royal: 253,
-  'npf-phase-1': 254,
-  'npf-phase-2': 0,
-};
-
       return blocks.map((block) => {
-        const total = MASTER_PLAN_TOTAL_PLOTS[block.id] ?? block.totalPlots;
-        const reserved = block.reservedCount || 0;
-        const booked = block.bookedCount || 0;
-        const available = Math.max(0, total - reserved - booked);
-
         return {
           id: block.id,
           name: block.name,
           description: block.description,
-          totalPlots: total,
-          totalCount: total,
-          availableCount: available,
-          reservedCount: reserved,
-          bookedCount: booked,
+          totalPlots: block.totalPlots,
+          totalCount: block.totalCount,
+          availableCount: block.availableCount,
+          reservedCount: block.reservedCount,
+          bookedCount: block.bookedCount,
           allottedCount: block.allottedCount,
           amenityCount: block.amenityCount,
           disputedCount: block.disputedCount,
