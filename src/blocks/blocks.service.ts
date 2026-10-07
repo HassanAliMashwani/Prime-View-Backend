@@ -16,8 +16,8 @@ export class BlocksService {
 
     const whereClause =
       role === 'super_admin'
-        ? Prisma.sql`WHERE b.id != 'chalet'`
-        : Prisma.sql`WHERE b.id IN (${Prisma.join(assignedBlocks)}) AND b.id != 'chalet'`;
+        ? Prisma.sql``
+        : Prisma.sql`WHERE b.id IN (${Prisma.join(assignedBlocks)})`;
 
     return this.prisma.withScopedSession(session, async (tx) => {
       const blocks = await tx.$queryRaw<

@@ -48,22 +48,21 @@ export class InventoryController {
   async getInventoryHistory(
     @Req() req: Request,
     @Query() query: any,
-    @Query('from') from: string,
-    @Query('to') to: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('range') range?: string,
     @Query('blockId') blockId?: string,
   ) {
     const session = req.user as any;
 
-    if (!from || !to) {
-      throw new BadRequestException('Both from and to dates are required for history query');
+    if (from && to) {
+      const fromDate = new Date(from);
+      const toDate = new Date(to);
+      if (toDate < fromDate) {
+        throw new BadRequestException('To date cannot be before From date');
+      }
     }
 
-    const fromDate = new Date(from);
-    const toDate = new Date(to);
-    if (toDate < fromDate) {
-      throw new BadRequestException('To date cannot be before From date');
-    }
-
-    return this.inventoryService.getHistory(session, from, to, blockId, query);
+    return this.inventoryService.getHistory(session, from, to, blockId, query, range);
   }
 }

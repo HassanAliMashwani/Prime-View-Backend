@@ -171,6 +171,10 @@ CREATE POLICY customer_update_scope ON "Customer"
     current_setting('app.current_role', true) = 'super_admin'
     OR id = current_setting('app.current_customer_id', true)
     OR current_setting('app.current_role', true) = ''
+    OR (
+      current_setting('app.current_role', true) = 'sub_admin'
+      AND current_setting('app.can_book', true) = 'true'
+    )
     OR id IN (
       SELECT "customerId" FROM "Booking" WHERE "plotId" IN (
         SELECT id FROM "Plot" WHERE "blockId" IN (
@@ -187,6 +191,7 @@ CREATE POLICY customer_insert_scope ON "Customer"
   WITH CHECK (
     current_setting('app.current_role', true) = 'super_admin'
     OR current_setting('app.can_create_customer', true) = 'true'
+    OR current_setting('app.can_book', true) = 'true'
   );
 
 -- Booking Policies

@@ -21,27 +21,36 @@ export interface InventoryTotals {
   total: number;
 }
 
+export interface MonthlyHistoryPoint {
+  month: string;
+  label: string;
+  year: number;
+  available: number;
+  reserved: number;
+  booked: number;
+}
+
 @Injectable()
 export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getStats(session: ScopedSession, from?: string, to?: string, blockId?: string, query?: any) {
+  async getStats(session: ScopedSession, from?: string, to?: string, blockId?: string, query?: any, range?: string) {
     if (from && to) {
-      return this.getHistory(session, from, to, blockId, query);
+      return this.getHistory(session, from, to, blockId, query, range);
     }
     return this.getLiveStats(session, blockId, query);
   }
 
   async getLiveStats(session: ScopedSession, blockId?: string, query?: any) {
     return this.prisma.withScopedSession(session, async (tx) => {
-      let blocksQuery: any = blockId ? { id: blockId } : {};
+      let blocksQuery: any = blockId ? { id: blockId } : { id: { not: 'chalet' } };
 
       if (session.role === 'sub_admin') {
         const adminUser = await tx.adminUser.findUnique({
           where: { id: session.adminId },
           include: { assignments: true },
         });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
+        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId).filter((id) => id !== 'chalet') || [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
@@ -148,21 +157,29 @@ export class InventoryService {
     });
   }
 
-  async getHistory(session: ScopedSession, from: string, to: string, blockId?: string, query?: any) {
+  async getHistory(
+    session: ScopedSession,
+    from?: string,
+    to?: string,
+    blockId?: string,
+    query?: any,
+    range?: string,
+  ) {
     return this.prisma.withScopedSession(session, async (tx) => {
-      let blocksQuery: any = blockId ? { id: blockId } : {};
+      let blocksQuery: any = blockId ? { id: blockId } : { id: { not: 'chalet' } };
 
       if (session.role === 'sub_admin') {
         const adminUser = await tx.adminUser.findUnique({
           where: { id: session.adminId },
           include: { assignments: true },
         });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
+        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId).filter((id) => id !== 'chalet') || [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
             stats: [],
             totals: { available: 0, reserved: 0, booked: 0, allotted: 0, disputedTotal: 0, total: 0 },
+            monthly: [],
             total: 0,
             page: 1,
             pageSize: 10,
@@ -183,18 +200,92 @@ export class InventoryService {
           ok: true,
           stats: [],
           totals: { available: 0, reserved: 0, booked: 0, allotted: 0, disputedTotal: 0, total: 0 },
+          monthly: [],
           total: 0,
           page: 1,
           pageSize: 10,
         };
       }
 
-      const fromStart = new Date(from);
+      const now = new Date();
+      let startYear: number;
+      let startMonth: number;
+      const endYear = now.getFullYear();
+      const endMonth = now.getMonth();
+
+      if (from && to && !range) {
+        const fromD = new Date(from);
+        startYear = fromD.getFullYear();
+        startMonth = fromD.getMonth();
+      } else if (range === '1_year') {
+        const d = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+        startYear = d.getFullYear();
+        startMonth = d.getMonth();
+      } else if (range === 'all_time') {
+        const firstHistoryRow = await tx.plotStatusHistory.findFirst({
+          where: { plot: { blockId: { in: allBlockIds } } },
+          orderBy: { changedAt: 'asc' },
+          select: { changedAt: true },
+        });
+        if (firstHistoryRow) {
+          const d = new Date(firstHistoryRow.changedAt);
+          startYear = d.getFullYear();
+          startMonth = d.getMonth();
+        } else {
+          startYear = now.getFullYear();
+          startMonth = now.getMonth();
+        }
+      } else {
+        // default: '6_months'
+        const d = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+        startYear = d.getFullYear();
+        startMonth = d.getMonth();
+      }
+
+      const months: Array<{
+        month: string;
+        label: string;
+        year: number;
+        start: Date;
+        end: Date;
+      }> = [];
+
+      let curY = startYear;
+      let curM = startMonth;
+
+      while (curY < endYear || (curY === endYear && curM <= endMonth)) {
+        const mDate = new Date(curY, curM, 1);
+        const mStart = new Date(curY, curM, 1, 0, 0, 0, 0);
+        const mEnd = new Date(curY, curM + 1, 0, 23, 59, 59, 999);
+        const shortName = mDate.toLocaleString('en-US', { month: 'short' });
+        const label = (range === 'all_time' && startYear !== endYear)
+          ? `${shortName} '${String(curY).slice(-2)}`
+          : shortName;
+
+        months.push({
+          month: `${curY}-${String(curM + 1).padStart(2, '0')}`,
+          label,
+          year: curY,
+          start: mStart,
+          end: mEnd,
+        });
+
+        curM++;
+        if (curM > 11) {
+          curM = 0;
+          curY++;
+        }
+      }
+
+      const fromStart = from ? new Date(from) : (months[0]?.start || new Date());
       fromStart.setHours(0, 0, 0, 0);
 
-      const toEnd = new Date(to);
+      const toEnd = to ? new Date(to) : (months[months.length - 1]?.end || new Date());
       toEnd.setHours(23, 59, 59, 999);
 
+      const maxEnd = months.length > 0 ? months[months.length - 1].end : toEnd;
+
+      // 1. Grouped block stats
       const statsRes = await tx.$queryRaw<any[]>`
         SELECT
           p."blockId",
@@ -252,6 +343,62 @@ export class InventoryService {
 
       totals.total = totals.available + totals.reserved + totals.booked + totals.allotted;
 
+      // 2. Monthly timeline series aggregation
+      const historyRows = await tx.$queryRaw<Array<{
+        plotId: string;
+        toStatus: string;
+        changedAt: Date;
+        category: string;
+      }>>`
+        SELECT psh."plotId", psh."toStatus", psh."changedAt", p."category"
+        FROM "PlotStatusHistory" psh
+        JOIN "Plot" p ON p."id" = psh."plotId"
+        WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+          AND psh."changedAt" <= ${maxEnd}
+        ORDER BY psh."changedAt" ASC
+      `;
+
+      const monthly: MonthlyHistoryPoint[] = months.map((m) => {
+        const mStartMs = m.start.getTime();
+        const mEndMs = m.end.getTime();
+
+        const reservedPlotIds = new Set<string>();
+        const bookedPlotIds = new Set<string>();
+        const latestStatusMap = new Map<string, string>();
+
+        for (const row of historyRows) {
+          const time = new Date(row.changedAt).getTime();
+          if (time <= mEndMs) {
+            if (row.category !== 'amenity') {
+              latestStatusMap.set(row.plotId, row.toStatus);
+            }
+            if (time >= mStartMs) {
+              if (row.toStatus === 'reserved') {
+                reservedPlotIds.add(row.plotId);
+              } else if (row.toStatus === 'booked') {
+                bookedPlotIds.add(row.plotId);
+              }
+            }
+          }
+        }
+
+        let availableCount = 0;
+        for (const st of latestStatusMap.values()) {
+          if (st === 'available') {
+            availableCount++;
+          }
+        }
+
+        return {
+          month: m.month,
+          label: m.label,
+          year: m.year,
+          available: availableCount,
+          reserved: reservedPlotIds.size,
+          booked: bookedPlotIds.size,
+        };
+      });
+
       const page = Math.max(1, parseInt(query?.page || '1', 10));
       const pageSize = query?.pageSize ? parseInt(query.pageSize, 10) : 10;
       const totalBlocks = results.length;
@@ -263,6 +410,7 @@ export class InventoryService {
         ok: true,
         stats: paginatedStats,
         totals,
+        monthly,
         total: totalBlocks,
         page,
         pageSize,
