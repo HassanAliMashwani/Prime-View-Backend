@@ -43,14 +43,14 @@ export class InventoryService {
 
   async getLiveStats(session: ScopedSession, blockId?: string, query?: any) {
     return this.prisma.withScopedSession(session, async (tx) => {
-      let blocksQuery: any = blockId ? { id: blockId } : { id: { not: 'chalet' } };
+      let blocksQuery: any = blockId ? { id: blockId } : {};
 
       if (session.role === 'sub_admin') {
         const adminUser = await tx.adminUser.findUnique({
           where: { id: session.adminId },
           include: { assignments: true },
         });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId).filter((id) => id !== 'chalet') || [];
+        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
@@ -166,14 +166,14 @@ export class InventoryService {
     range?: string,
   ) {
     return this.prisma.withScopedSession(session, async (tx) => {
-      let blocksQuery: any = blockId ? { id: blockId } : { id: { not: 'chalet' } };
+      let blocksQuery: any = blockId ? { id: blockId } : {};
 
       if (session.role === 'sub_admin') {
         const adminUser = await tx.adminUser.findUnique({
           where: { id: session.adminId },
           include: { assignments: true },
         });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId).filter((id) => id !== 'chalet') || [];
+        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
