@@ -31,4 +31,39 @@ export class InventoryController {
 
     return this.inventoryService.getStats(session, from, to, blockId, query);
   }
+
+  @Get('live')
+  @RequirePermission('can_view_inventory')
+  async getLiveStats(
+    @Req() req: Request,
+    @Query() query: any,
+    @Query('blockId') blockId?: string,
+  ) {
+    const session = req.user as any;
+    return this.inventoryService.getLiveStats(session, blockId, query);
+  }
+
+  @Get('history')
+  @RequirePermission('can_view_inventory')
+  async getInventoryHistory(
+    @Req() req: Request,
+    @Query() query: any,
+    @Query('from') from: string,
+    @Query('to') to: string,
+    @Query('blockId') blockId?: string,
+  ) {
+    const session = req.user as any;
+
+    if (!from || !to) {
+      throw new BadRequestException('Both from and to dates are required for history query');
+    }
+
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    if (toDate < fromDate) {
+      throw new BadRequestException('To date cannot be before From date');
+    }
+
+    return this.inventoryService.getHistory(session, from, to, blockId, query);
+  }
 }
