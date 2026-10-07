@@ -545,18 +545,46 @@ export class PlotsService {
         if (!customer) {
           throw new NotFoundException({ error: 'CUSTOMER_NOT_FOUND', message: 'Specified customer not found' });
         }
+        if (dto.customer?.city) {
+          customer = await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              city: dto.customer.city.trim(),
+              mailingAddress: customer.mailingAddress || dto.customer.city.trim(),
+            },
+          });
+        }
       } else if (dto.customer) {
-        customer = await tx.customer.findFirst({
-          where: {
-            OR: [
-              { email: dto.customer.email.trim() },
-              { phone: dto.customer.phone.trim() },
-              ...(dto.customer.cnic && dto.customer.cnic !== 'Pending' ? [{ cnic: dto.customer.cnic.trim() }] : []),
-            ],
-          },
-        });
+        // The same CNIC must not create a second member: check by CNIC first
+        const cnicToFind = dto.customer.cnic && dto.customer.cnic !== 'Pending' ? dto.customer.cnic.trim() : null;
+        if (cnicToFind) {
+          customer = await tx.customer.findFirst({
+            where: { cnic: { equals: cnicToFind, mode: 'insensitive' } },
+          });
+        }
 
         if (!customer) {
+          customer = await tx.customer.findFirst({
+            where: {
+              OR: [
+                { email: dto.customer.email.trim() },
+                { phone: dto.customer.phone.trim() },
+              ],
+            },
+          });
+        }
+
+        if (customer) {
+          if (dto.customer.city) {
+            customer = await tx.customer.update({
+              where: { id: customer.id },
+              data: {
+                city: dto.customer.city.trim(),
+                mailingAddress: customer.mailingAddress || dto.customer.city.trim(),
+              },
+            });
+          }
+        } else {
           const custId = `cust-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
           customer = await tx.customer.create({
             data: {
@@ -567,7 +595,8 @@ export class PlotsService {
               cnic: dto.customer.cnic?.trim() || 'Pending',
               email: dto.customer.email.trim(),
               phone: dto.customer.phone.trim(),
-              mailingAddress: dto.customer.mailingAddress?.trim() || null,
+              city: dto.customer.city?.trim() || null,
+              mailingAddress: dto.customer.mailingAddress?.trim() || dto.customer.city?.trim() || null,
               nokName: dto.customer.nokName?.trim() || null,
               nokCnic: dto.customer.nokCnic?.trim() || null,
               registrationStatus: 'minimal',
@@ -624,16 +653,16 @@ export class PlotsService {
         });
       }
 
-      // 3. Atomic Conditional Update on Plot
+      // 3. Atomic Conditional Update on Plot (Hold only: set status to booked, do not allot)
       const pType: PaymentType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
-      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
+      const targetPlotStatus = PlotStatus.booked;
 
       await updatePlotStatus(tx, {
         plotId,
         fromStatus: plot.status,
         toStatus: targetPlotStatus,
         changedBy: session.adminId || session.username,
-        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        source: 'book',
         plotData: {
           currentOwnerId: customer.id,
           lockedBy: null,
@@ -734,8 +763,8 @@ export class PlotsService {
           feeType: FeeType.plot_one_time,
           dueDate: now,
           amount: plotPriceNum,
-          paidAmount: plotPriceNum,
-          status: PaymentStatus.paid,
+          paidAmount: 0,
+          status: PaymentStatus.pending,
         });
       } else {
         if (downpaymentAmount > 0) {
@@ -776,8 +805,6 @@ export class PlotsService {
       }
 
       await tx.paymentRecord.createMany({ data: paymentsToCreate });
-
-      await maybeAllotIfFullyPaid(tx, booking.id, session.adminId || session.username || 'system');
 
       // 7. Test-Only Failure Injection (Strictly gated: no-op outside test simulation environment)
       if (process.env.ENABLE_TEST_SIMULATIONS === 'true' && dto.simulateRollback) {
@@ -832,18 +859,19 @@ export class PlotsService {
 
       await tx.societyDocument.createMany({ data: societyDocsToCreate });
 
-      // 9. Confirm active reservation if converting
-      if (liveRes) {
-        await tx.reservation.update({
-          where: { id: liveRes.id },
-          data: {
-            status: ReservationStatus.confirmed,
-            confirmedAt: now,
-            confirmedByBookingId: bookingId,
-            resolutionNote: `Confirmed into booking ${bookingId}`,
-          },
-        });
-      }
+      // 9. Supersede active and confirmed reservations on that plot
+      await tx.reservation.updateMany({
+        where: {
+          plotId: plot.id,
+          status: { in: [ReservationStatus.active, ReservationStatus.confirmed] },
+        },
+        data: {
+          status: ReservationStatus.superseded,
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by booking ${bookingId}`,
+        },
+      });
 
       // 10. Audit entry for PLOT_BOOKED inside same transaction
       await tx.auditEntry.create({

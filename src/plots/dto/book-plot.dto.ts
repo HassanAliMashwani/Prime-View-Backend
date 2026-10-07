@@ -20,6 +20,10 @@ export class CustomerInfoDto {
 
   @IsString()
   @IsOptional()
+  city?: string;
+
+  @IsString()
+  @IsOptional()
   fatherOrHusbandName?: string;
 
   @IsString()

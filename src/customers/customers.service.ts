@@ -354,47 +354,61 @@ export class CustomersService {
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
-      // 1. Create Minimal Customer
-      const newCustomer = await tx.customer.create({
-        data: {
-          id: customerId,
-          fullName: dto.customerName.trim(),
-          cnic: dto.cnic.trim(),
-          city: dto.city.trim(),
-          mailingAddress: dto.city.trim(),
-          registrationStatus: 'minimal',
-          credentialsPending: true,
-          accountStatus: 'active',
-          termsAccepted: false,
-        },
+      // 1. Resolve Customer (Attach to existing member if CNIC exists, else create minimal customer)
+      const normalizedCnic = dto.cnic.trim();
+      let customer = await tx.customer.findFirst({
+        where: { cnic: { equals: normalizedCnic, mode: 'insensitive' } },
       });
 
-      // 2. Create Booking
+      if (customer) {
+        customer = await tx.customer.update({
+          where: { id: customer.id },
+          data: {
+            city: dto.city.trim(),
+            mailingAddress: customer.mailingAddress || dto.city.trim(),
+          },
+        });
+      } else {
+        customer = await tx.customer.create({
+          data: {
+            id: customerId,
+            fullName: dto.customerName.trim(),
+            cnic: normalizedCnic,
+            city: dto.city.trim(),
+            mailingAddress: dto.city.trim(),
+            registrationStatus: 'minimal',
+            credentialsPending: true,
+            accountStatus: 'active',
+            termsAccepted: false,
+          },
+        });
+      }
+
+      // 2. Create Booking (Only holds the plot as booked)
       const newBooking = await tx.booking.create({
         data: {
           id: bookingId,
-          customerId: newCustomer.id,
+          customerId: customer.id,
           plotId: plot.id,
           paymentType: PaymentType.installment,
           status: 'active',
-          registrationStatus: 'minimal',
+          registrationStatus: customer.registrationStatus || 'minimal',
           bookingDate: now,
           createdByAdminId: session.adminId || session.username,
         },
       });
 
-      // 3. Flip Plot to booked/allotted & clear locks
-      const pType = (dto as any).paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
-      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
+      // 3. Flip Plot to booked & clear locks (Do not allot, do not mark plot price paid, do not call maybeAllotIfFullyPaid)
+      const targetPlotStatus = PlotStatus.booked;
 
       await updatePlotStatus(tx, {
         plotId: plot.id,
         fromStatus: plot.status,
         toStatus: targetPlotStatus,
         changedBy: session.adminId || session.username,
-        source: pType === PaymentType.one_time ? 'allot' : 'book',
+        source: 'book',
         plotData: {
-          currentOwnerId: newCustomer.id,
+          currentOwnerId: customer.id,
           lockedBy: null,
           lockedAt: null,
         },
@@ -403,22 +417,30 @@ export class CustomersService {
       const updatedPlot = {
         ...plot,
         status: targetPlotStatus,
-        currentOwnerId: newCustomer.id,
+        currentOwnerId: customer.id,
         lockedBy: null,
         lockedAt: null,
       };
 
-      // 4. Supersede prior active reservations
+      // 4. Supersede active and confirmed reservations on that plot
       await tx.reservation.updateMany({
-        where: { plotId: plot.id, status: 'active' },
-        data: { status: 'superseded', supersededAt: now, supersededByBookingId: bookingId },
+        where: {
+          plotId: plot.id,
+          status: { in: ['active', 'confirmed'] },
+        },
+        data: {
+          status: 'superseded',
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by booking ${bookingId}`,
+        },
       });
 
       // 5. System Document
       const doc = await tx.societyDocument.create({
         data: {
           id: `doc-${bookingId}-1`,
-          customerId: newCustomer.id,
+          customerId: customer.id,
           bookingId: newBooking.id,
           type: GeneratedDocType.booking_confirmation,
           fileName: `Quick_Booking_Confirmation_Plot_${plot.plotNumber}.pdf`,
@@ -436,33 +458,33 @@ export class CustomersService {
           action: 'PLOT_BOOKED',
           entityType: 'booking',
           entityId: bookingId,
-          details: `Quick Booking for Plot ${plot.plotNumber} created by ${session.fullName || session.username} for ${newCustomer.fullName} (Minimal Registration)`,
+          details: `Quick Booking for Plot ${plot.plotNumber} created by ${session.fullName || session.username} for ${customer.fullName} (Minimal Registration)`,
           newValue: {
             plotNumber: plot.plotNumber,
-            customerName: newCustomer.fullName,
-            cnic: newCustomer.cnic,
-            city: newCustomer.city,
+            customerName: customer.fullName,
+            cnic: customer.cnic,
+            city: customer.city,
           },
         },
       });
 
-      return { customer: newCustomer, booking: newBooking, plot: updatedPlot, doc };
+      return { customer, booking: newBooking, plot: updatedPlot, doc };
     });
 
     // Supabase Realtime Broadcasts
     await this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_BOOKED', {
       plotId: plot.id,
       bookingId,
-      customerId,
+      customerId: result.customer.id,
       bookedBy: session.adminId,
     });
     await this.realtime.broadcast('plots', 'PLOT_BOOKED', {
       plotId: plot.id,
       bookingId,
-      customerId,
+      customerId: result.customer.id,
       bookedBy: session.adminId,
     });
-    await this.realtime.broadcast('customers', 'CUSTOMER_CREATED', { customerId });
+    await this.realtime.broadcast('customers', 'CUSTOMER_CREATED', { customerId: result.customer.id });
 
     return {
       ok: true,
@@ -519,9 +541,11 @@ export class CustomersService {
       });
     }
 
-    const booking = dto.bookingId
-      ? customer.bookings.find((b) => b.id === dto.bookingId)
-      : customer.bookings[0];
+    const booking = dto.plotId
+      ? customer.bookings.find((b) => b.plotId === dto.plotId)
+      : dto.bookingId
+        ? customer.bookings.find((b) => b.id === dto.bookingId)
+        : customer.bookings[0];
 
     if (!booking) {
       throw new BadRequestException({
@@ -553,20 +577,25 @@ export class CustomersService {
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Update Customer
+      const customerUpdateData: any = {
+        membershipNo: targetMembershipNo,
+        fatherOrHusbandName: dto.fatherOrHusbandName.trim(),
+        phone: dto.phone.trim(),
+        email: dto.email.trim(),
+        mailingAddress: dto.mailingAddress.trim(),
+        nokName: dto.nokName.trim(),
+        nokCnic: dto.nokCnic.trim(),
+        registrationStatus: 'complete',
+        credentialsPending: false,
+        passwordHash,
+      };
+      if (dto.city) {
+        customerUpdateData.city = dto.city.trim();
+      }
+
       const updatedCustomer = await tx.customer.update({
         where: { id: customer.id },
-        data: {
-          membershipNo: targetMembershipNo,
-          fatherOrHusbandName: dto.fatherOrHusbandName.trim(),
-          phone: dto.phone.trim(),
-          email: dto.email.trim(),
-          mailingAddress: dto.mailingAddress.trim(),
-          nokName: dto.nokName.trim(),
-          nokCnic: dto.nokCnic.trim(),
-          registrationStatus: 'complete',
-          credentialsPending: false,
-          passwordHash,
-        },
+        data: customerUpdateData,
       });
 
       // 2. Update Booking
@@ -582,38 +611,58 @@ export class CustomersService {
         },
       });
 
-      // 3. Create Fixed Statutory Fees (PKR 2,000 Admission Fee, PKR 10,000 Share Subscription Fee)
-      const admFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-adm-${booking.id}`,
-          bookingId: booking.id,
-          feeType: FeeType.admission_fee,
-          dueDate: now,
-          amount: 2000,
-          paidAmount: 2000,
-          status: PaymentStatus.paid,
-        },
+      // 3. Create Fixed Statutory Fees (PKR 2,000 Admission Fee, PKR 10,000 Share Subscription Fee) if not already existing
+      let admFee = await tx.paymentRecord.findFirst({
+        where: { bookingId: booking.id, feeType: FeeType.admission_fee },
       });
+      if (!admFee) {
+        admFee = await tx.paymentRecord.create({
+          data: {
+            id: `fee-adm-${booking.id}`,
+            bookingId: booking.id,
+            feeType: FeeType.admission_fee,
+            dueDate: now,
+            amount: 2000,
+            paidAmount: 2000,
+            status: PaymentStatus.paid,
+          },
+        });
+      }
 
-      const subFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-sub-${booking.id}`,
-          bookingId: booking.id,
-          feeType: FeeType.share_subscription_fee,
-          dueDate: now,
-          amount: 10000,
-          paidAmount: 10000,
-          status: PaymentStatus.paid,
-        },
+      let subFee = await tx.paymentRecord.findFirst({
+        where: { bookingId: booking.id, feeType: FeeType.share_subscription_fee },
       });
+      if (!subFee) {
+        subFee = await tx.paymentRecord.create({
+          data: {
+            id: `fee-sub-${booking.id}`,
+            bookingId: booking.id,
+            feeType: FeeType.share_subscription_fee,
+            dueDate: now,
+            amount: 10000,
+            paidAmount: 10000,
+            status: PaymentStatus.paid,
+          },
+        });
+      }
 
       const paymentRecords = [admFee, subFee];
 
-      // 4. Plot Price Payment Records
+      // Remove any existing unpaid plot installment or one-time payment records for this booking to avoid duplicates
+      await tx.paymentRecord.deleteMany({
+        where: {
+          bookingId: booking.id,
+          feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time] },
+          status: { not: PaymentStatus.paid },
+        },
+      });
+
+      // 4. Plot Price Payment Records & Status
       if (pType === PaymentType.one_time) {
+        // Full payment: mark this plot's official price paid and set this plot to allotted
         const fullPay = await tx.paymentRecord.create({
           data: {
-            id: `pay-one-${booking.id}`,
+            id: `pay-one-${booking.id}-${Date.now()}`,
             bookingId: booking.id,
             feeType: FeeType.plot_one_time,
             dueDate: now,
@@ -623,11 +672,28 @@ export class CustomersService {
           },
         });
         paymentRecords.push(fullPay);
+
+        // Allot the plot
+        if (plot.status !== PlotStatus.allotted) {
+          await updatePlotStatus(tx, {
+            plotId: plot.id,
+            fromStatus: plot.status,
+            toStatus: PlotStatus.allotted,
+            changedBy: session.adminId || session.username,
+            source: 'allot',
+            plotData: {
+              currentOwnerId: customer.id,
+              lockedBy: null,
+              lockedAt: null,
+            },
+          });
+        }
       } else {
+        // Installment: store typed price on booking's installment schedule only; leave plot booked
         if (downpaymentAmount > 0) {
           const downRec = await tx.paymentRecord.create({
             data: {
-              id: `pay-down-${booking.id}`,
+              id: `pay-down-${booking.id}-${Date.now()}`,
               bookingId: booking.id,
               feeType: FeeType.plot_downpayment,
               installmentNumber: 0,
@@ -649,7 +715,7 @@ export class CustomersService {
 
           const instRec = await tx.paymentRecord.create({
             data: {
-              id: `pay-inst-${booking.id}-${i}`,
+              id: `pay-inst-${booking.id}-${i}-${Date.now()}`,
               bookingId: booking.id,
               feeType: FeeType.plot_installment,
               installmentNumber: i,
@@ -661,11 +727,26 @@ export class CustomersService {
           });
           paymentRecords.push(instRec);
         }
+
+        // Leave plot booked. Only allots later if fully paid via existing rule.
+        await maybeAllotIfFullyPaid(tx, booking.id, session.adminId || session.username || 'system');
       }
 
-      await maybeAllotIfFullyPaid(tx, booking.id, session.adminId || session.username || 'system');
+      // 5. Supersede active and confirmed reservations on this plot
+      await tx.reservation.updateMany({
+        where: {
+          plotId: plot.id,
+          status: { in: ['active', 'confirmed'] },
+        },
+        data: {
+          status: 'superseded',
+          supersededAt: now,
+          supersededByBookingId: booking.id,
+          resolutionNote: `Superseded by booking ${booking.id}`,
+        },
+      });
 
-      // 5. Society Documents
+      // 6. Society Documents
       const agreementDoc = await tx.societyDocument.create({
         data: {
           id: `doc-${booking.id}-agr`,
@@ -690,8 +771,8 @@ export class CustomersService {
         },
       });
 
-      // 6. Optional Physical Documents
-      if (dto.applicantPhotoUrl) {
+      // 7. Optional Physical Documents (Only when non-empty and not placeholder)
+      if (dto.applicantPhotoUrl && !dto.applicantPhotoUrl.includes('placeholder')) {
         await tx.customerDocument.create({
           data: {
             id: `cdoc-${booking.id}-photo`,
@@ -705,7 +786,7 @@ export class CustomersService {
           },
         });
       }
-      if (dto.cnicCopyUrl) {
+      if (dto.cnicCopyUrl && !dto.cnicCopyUrl.includes('placeholder')) {
         await tx.customerDocument.create({
           data: {
             id: `cdoc-${booking.id}-cnic`,
@@ -720,7 +801,7 @@ export class CustomersService {
         });
       }
 
-      // 7. Audit Entry
+      // 8. Audit Entry
       await tx.auditEntry.create({
         data: {
           actorId: session.adminId || session.username,
@@ -1148,10 +1229,18 @@ export class CustomersService {
         lockedAt: null,
       };
 
-      // 3. Supersede active reservations
+      // 3. Supersede active and confirmed reservations
       await tx.reservation.updateMany({
-        where: { plotId: plot.id, status: 'active' },
-        data: { status: 'superseded', supersededAt: now, supersededByBookingId: bookingId },
+        where: {
+          plotId: plot.id,
+          status: { in: ['active', 'confirmed'] },
+        },
+        data: {
+          status: 'superseded',
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by booking ${bookingId}`,
+        },
       });
 
       // 4. Statutory Fees

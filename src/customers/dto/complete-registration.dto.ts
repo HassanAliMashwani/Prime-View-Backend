@@ -63,4 +63,12 @@ export class CompleteRegistrationDto {
   @IsString()
   @IsOptional()
   bookingId?: string;
+
+  @IsString()
+  @IsOptional()
+  plotId?: string;
+
+  @IsString()
+  @IsOptional()
+  city?: string;
 }
