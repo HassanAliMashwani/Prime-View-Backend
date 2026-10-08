@@ -86,7 +86,10 @@ export class InventoryService {
       // Read current status counts directly from the Plot table at the moment of request
       const livePlotGrouped = await tx.plot.groupBy({
         by: ['blockId', 'status'],
-        where: { blockId: { in: allBlockIds } },
+        where: {
+          blockId: { in: allBlockIds },
+          category: { not: 'amenity' },
+        },
         _count: { id: true },
       });
 
@@ -303,6 +306,7 @@ export class InventoryService {
           WHERE "changedAt" <= ${toEnd}
         ) latest ON latest."plotId" = p."id" AND latest.rn = 1
         WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+          AND p."category" != 'amenity'
         GROUP BY p."blockId"
       `;
 
@@ -354,6 +358,7 @@ export class InventoryService {
         FROM "PlotStatusHistory" psh
         JOIN "Plot" p ON p."id" = psh."plotId"
         WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+          AND p."category" != 'amenity'
           AND psh."changedAt" <= ${maxEnd}
         ORDER BY psh."changedAt" ASC
       `;
@@ -398,6 +403,13 @@ export class InventoryService {
           booked: bookedPlotIds.size,
         };
       });
+
+      if (monthly.length > 0) {
+        const lastIdx = monthly.length - 1;
+        monthly[lastIdx].available = totals.available;
+        monthly[lastIdx].reserved = totals.reserved;
+        monthly[lastIdx].booked = totals.booked;
+      }
 
       const page = Math.max(1, parseInt(query?.page || '1', 10));
       const pageSize = query?.pageSize ? parseInt(query.pageSize, 10) : 10;

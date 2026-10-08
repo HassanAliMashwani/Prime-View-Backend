@@ -29,7 +29,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-236",
@@ -59,7 +59,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 31100000,
-    "status": "booked"
+    "status": "available"
   },
   {
     "id": "plot-el-253",
@@ -109,7 +109,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-248",
@@ -259,7 +259,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-143",
@@ -309,7 +309,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "booked"
+    "status": "available"
   },
   {
     "id": "plot-el-148",
@@ -381,16 +381,7 @@ export const eliteSeedPlots: Plot[] = [
     "price": 25000000,
     "status": "available"
   },
-  {
-    "id": "plot-el-155-2",
-    "blockId": "elite",
-    "plotNumber": "155-2",
-    "size": "2 Kanal",
-    "category": "residential",
-    "plotType": "2_kanal",
-    "price": 25000000,
-    "status": "available"
-  },
+
   {
     "id": "plot-el-156",
     "blockId": "elite",
@@ -509,7 +500,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 26600000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-168",
@@ -609,7 +600,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 26400000,
-    "status": "booked"
+    "status": "available"
   },
   {
     "id": "plot-el-127",
@@ -759,7 +750,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-112",
@@ -909,7 +900,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "booked"
+    "status": "available"
   },
   {
     "id": "plot-el-95",
@@ -1109,7 +1100,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "reserved"
+    "status": "available"
   },
   {
     "id": "plot-el-73",
@@ -1410,7 +1401,7 @@ export const eliteSeedPlots: Plot[] = [
     "category": "residential",
     "plotType": "2_kanal",
     "price": 25000000,
-    "status": "booked"
+    "status": "available"
   },
   {
     "id": "plot-el-35",
@@ -1810,6 +1801,16 @@ export const eliteSeedPlots: Plot[] = [
     "id": "plot-el-169",
     "blockId": "elite",
     "plotNumber": "169",
+    "size": "42.5 Marla",
+    "category": "residential",
+    "plotType": "42.5_marla",
+    "price": 0,
+    "status": "available"
+  },
+  {
+    "id": "plot-el-pvc",
+    "blockId": "elite",
+    "plotNumber": "",
     "size": "17.31 Kanal",
     "category": "amenity",
     "plotType": "amenity_primeViewClub",
