@@ -455,17 +455,6 @@ export class ReceiptsService {
         orderBy: { uploadedAt: 'desc' },
       });
 
-      const receiptIds = receipts.map((r) => r.id);
-      let photoMap = new Map<string, boolean>();
-      if (receiptIds.length > 0) {
-        const photoRows = await tx.$queryRaw<Array<{ id: string; hasPhoto: boolean }>>`
-          SELECT id, ("receiptFileUrl" IS NOT NULL AND "receiptFileUrl" <> '') as "hasPhoto"
-          FROM "ReceiptSubmission"
-          WHERE id = ANY(${receiptIds})
-        `;
-        photoMap = new Map(photoRows.map((p) => [p.id, Boolean(p.hasPhoto)]));
-      }
-
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
         where: { id: { in: bookingIds } },
@@ -487,8 +476,7 @@ export class ReceiptsService {
 
         return {
           ...r,
-          hasPhoto: photoMap.get(r.id) ?? false,
-          receiptFileUrl: undefined,
+          hasPhoto: true,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           customerName: r.customer?.fullName || '',
           membershipNo: r.customer?.membershipNo || '',
