@@ -28,4 +28,8 @@ export class UpdateCustomerProfileDto {
   @IsOptional()
   @IsString()
   nokCnic?: string;
+
+  @IsOptional()
+  @IsString()
+  applicantPhotoUrl?: string;
 }

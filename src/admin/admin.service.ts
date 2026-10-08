@@ -193,10 +193,15 @@ export class AdminService {
       ]);
     });
 
-    const formatted = subAdmins.map((u) => ({
-      ...u,
-      assignedBlocks: u.assignments.map((a) => a.blockId),
-    }));
+    const formatted = subAdmins.map((u) => {
+      const perm = (u.permissions && typeof u.permissions === 'object') ? (u.permissions as any) : {};
+      return {
+        ...u,
+        avatarUrl: perm.avatarUrl || '',
+        phone: perm.phone || '',
+        assignedBlocks: u.assignments.map((a) => a.blockId),
+      };
+    });
 
     return { 
       ok: true, 
@@ -366,14 +371,18 @@ export class AdminService {
       permissions: targetUser.permissions,
     };
 
+    const targetPermObj = (targetUser.permissions && typeof targetUser.permissions === 'object') ? (targetUser.permissions as any) : {};
     const updatedPermissions = dto.permissions
       ? MODULE_REGISTRY.reduce((acc, item) => {
           const key = item.key;
           acc[key] = dto.permissions?.[key as keyof typeof dto.permissions] !== undefined
             ? Boolean(dto.permissions[key as keyof typeof dto.permissions])
-            : Boolean((targetUser.permissions as any)?.[key]);
+            : Boolean(targetPermObj[key]);
           return acc;
-        }, {} as Record<string, boolean>)
+        }, {
+          ...(targetPermObj.avatarUrl ? { avatarUrl: targetPermObj.avatarUrl } : {}),
+          ...(targetPermObj.phone ? { phone: targetPermObj.phone } : {}),
+        } as Record<string, any>)
       : targetUser.permissions;
 
     let passwordHash: string | undefined = undefined;

@@ -233,6 +233,11 @@ export class CustomersService {
           accountStatus: true,
           registrationStatus: true,
           credentialsPending: true,
+          documents: {
+            where: { type: 'applicant_photo' },
+            select: { fileUrl: true },
+            take: 1,
+          },
           _count: {
             select: { strikes: true }
           },
@@ -283,6 +288,7 @@ export class CustomersService {
           registrationStatus: c.registrationStatus,
           credentialsPending: c.credentialsPending,
           strikeCount: c._count.strikes,
+          applicantPhotoUrl: c.documents?.[0]?.fileUrl || undefined,
           plotCount,
           plots,
           totalPaid,
@@ -342,6 +348,9 @@ export class CustomersService {
         session.assignedBlocks.includes(b.plot.blockId),
       );
     }
+
+    const applicantPhoto = customer.documents?.find((d: any) => d.type === 'applicant_photo');
+    (customer as any).applicantPhotoUrl = applicantPhoto?.fileUrl || null;
 
     return customer;
   }
@@ -1768,6 +1777,35 @@ export class CustomersService {
           nokCnic: dto.nokCnic !== undefined ? dto.nokCnic.trim() : undefined,
         },
       });
+
+      if (dto.applicantPhotoUrl !== undefined) {
+        if (dto.applicantPhotoUrl.trim().length > 0) {
+          const existingPhoto = await tx.customerDocument.findFirst({
+            where: { customerId: id, type: 'applicant_photo' },
+          });
+          if (existingPhoto) {
+            await tx.customerDocument.update({
+              where: { id: existingPhoto.id },
+              data: { fileUrl: dto.applicantPhotoUrl.trim() },
+            });
+          } else {
+            await tx.customerDocument.create({
+              data: {
+                customerId: id,
+                type: 'applicant_photo' as any,
+                fileName: 'applicant_photo.jpg',
+                fileUrl: dto.applicantPhotoUrl.trim(),
+                fileSizeKb: 1,
+                uploadedById: session.customerId || session.adminId || session.username,
+              },
+            });
+          }
+        } else {
+          await tx.customerDocument.deleteMany({
+            where: { customerId: id, type: 'applicant_photo' },
+          });
+        }
+      }
 
       await tx.auditEntry.create({
         data: {
