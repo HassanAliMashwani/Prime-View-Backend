@@ -19,6 +19,7 @@ import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
 import { ResetAdminPasswordDto } from './dto/reset-admin-password.dto';
 import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
+import { UpdateAdminProfileDto } from './dto/update-admin-profile.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 
 @Controller('admin')
@@ -100,6 +101,15 @@ export class AdminController {
   @Get('profile')
   async getProfile(@CurrentSession() session: any) {
     return this.adminService.getProfile(session);
+  }
+
+  @Patch('profile')
+  @HttpCode(HttpStatus.OK)
+  async updateProfile(
+    @Body() dto: UpdateAdminProfileDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.adminService.updateProfile(dto, session);
   }
 
   @Post('change-password')

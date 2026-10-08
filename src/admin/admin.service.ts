@@ -13,6 +13,7 @@ import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
 import { UpdateSubAdminDto } from './dto/update-sub-admin.dto';
 import { ResetAdminPasswordDto } from './dto/reset-admin-password.dto';
 import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
+import { UpdateAdminProfileDto } from './dto/update-admin-profile.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 import * as bcrypt from 'bcrypt';
 
@@ -611,6 +612,7 @@ export class AdminService {
       throw new NotFoundException('Administrator account not found');
     }
 
+    const permissionsObj = (admin.permissions && typeof admin.permissions === 'object') ? (admin.permissions as any) : {};
     return {
       ok: true,
       admin: {
@@ -618,12 +620,83 @@ export class AdminService {
         username: admin.username,
         email: admin.email,
         fullName: admin.fullName,
+        phone: permissionsObj.phone || '',
+        avatarUrl: permissionsObj.avatarUrl || '',
         role: admin.role,
         status: admin.status,
         permissions: admin.permissions,
         assignedBlocks: admin.assignments.map((a) => a.blockId),
         createdDate: admin.createdDate,
         lastLogin: admin.lastLogin,
+      },
+    };
+  }
+
+  /**
+   * PATCH /admin/profile
+   * Self-service admin profile details update (fullName, email, phone, avatarUrl).
+   */
+  async updateProfile(dto: UpdateAdminProfileDto, session: any) {
+    const adminId = session.adminId;
+    if (!adminId) {
+      throw new UnauthorizedException('Invalid session');
+    }
+
+    const admin = await this.prisma.adminUser.findUnique({
+      where: { id: adminId },
+      include: { assignments: true },
+    });
+
+    if (!admin) {
+      throw new NotFoundException('Administrator account not found');
+    }
+
+    if (dto.email && dto.email.trim().toLowerCase() !== admin.email.toLowerCase()) {
+      const existing = await this.prisma.adminUser.findUnique({
+        where: { email: dto.email.trim().toLowerCase() },
+      });
+      if (existing && existing.id !== admin.id) {
+        throw new BadRequestException('Email address is already in use by another administrative account.');
+      }
+    }
+
+    const currentPermissions = (admin.permissions && typeof admin.permissions === 'object')
+      ? { ...(admin.permissions as Record<string, any>) }
+      : {};
+
+    if (dto.phone !== undefined) {
+      currentPermissions.phone = dto.phone.trim();
+    }
+    if (dto.avatarUrl !== undefined) {
+      currentPermissions.avatarUrl = dto.avatarUrl.trim();
+    }
+
+    const updated = await this.prisma.adminUser.update({
+      where: { id: adminId },
+      data: {
+        fullName: dto.fullName !== undefined && dto.fullName.trim().length > 0 ? dto.fullName.trim() : undefined,
+        email: dto.email !== undefined && dto.email.trim().length > 0 ? dto.email.trim().toLowerCase() : undefined,
+        permissions: currentPermissions,
+      },
+      include: { assignments: true },
+    });
+
+    return {
+      ok: true,
+      message: 'Profile details updated successfully.',
+      admin: {
+        id: updated.id,
+        username: updated.username,
+        email: updated.email,
+        fullName: updated.fullName,
+        phone: currentPermissions.phone || '',
+        avatarUrl: currentPermissions.avatarUrl || '',
+        role: updated.role,
+        status: updated.status,
+        permissions: updated.permissions,
+        assignedBlocks: updated.assignments.map((a) => a.blockId),
+        createdDate: updated.createdDate,
+        lastLogin: updated.lastLogin,
       },
     };
   }
