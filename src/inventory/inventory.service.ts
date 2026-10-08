@@ -379,6 +379,7 @@ export class InventoryService {
             FROM "PlotStatusHistory" psh
             JOIN "Plot" p ON p."id" = psh."plotId"
             WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+              AND p."category" != 'amenity'
               AND psh."changedAt" >= m.m_start
               AND psh."changedAt" <= m.m_end
               AND psh."toStatus" IN ('reserved', 'booked')
