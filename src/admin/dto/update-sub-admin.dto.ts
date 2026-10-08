@@ -3,6 +3,10 @@ import { IsString, IsArray, IsOptional, IsObject, IsIn } from 'class-validator';
 export class UpdateSubAdminDto {
   @IsOptional()
   @IsString()
+  username?: string;
+
+  @IsOptional()
+  @IsString()
   fullName?: string;
 
   @IsOptional()

@@ -364,7 +364,24 @@ export class AdminService {
       });
     }
 
+    let cleanUsername: string | undefined = undefined;
+    if (dto.username !== undefined && dto.username.trim().length > 0) {
+      cleanUsername = dto.username.trim().toLowerCase().replace(/^@/, '');
+      if (cleanUsername !== targetUser.username.toLowerCase()) {
+        const existing = await this.prisma.adminUser.findUnique({
+          where: { username: cleanUsername },
+        });
+        if (existing && existing.id !== targetUser.id) {
+          throw new BadRequestException({
+            error: 'USERNAME_TAKEN',
+            message: 'This username is already taken by another administrator.',
+          });
+        }
+      }
+    }
+
     const oldState = {
+      username: targetUser.username,
       fullName: targetUser.fullName,
       status: targetUser.status,
       assignedBlocks: targetUser.assignments.map((a) => a.blockId),
@@ -394,6 +411,7 @@ export class AdminService {
       const updated = await tx.adminUser.update({
         where: { id: adminId },
         data: {
+          username: cleanUsername !== undefined ? cleanUsername : undefined,
           fullName: dto.fullName !== undefined ? dto.fullName.trim() : undefined,
           status: dto.status !== undefined ? dto.status : undefined,
           passwordHash: passwordHash !== undefined ? passwordHash : undefined,
@@ -669,6 +687,19 @@ export class AdminService {
       }
     }
 
+    let cleanUsername: string | undefined = undefined;
+    if (dto.username !== undefined && dto.username.trim().length > 0) {
+      cleanUsername = dto.username.trim().toLowerCase().replace(/^@/, '');
+      if (cleanUsername !== admin.username.toLowerCase()) {
+        const existingUser = await this.prisma.adminUser.findUnique({
+          where: { username: cleanUsername },
+        });
+        if (existingUser && existingUser.id !== admin.id) {
+          throw new BadRequestException('Username is already taken by another administrator.');
+        }
+      }
+    }
+
     const currentPermissions = (admin.permissions && typeof admin.permissions === 'object')
       ? { ...(admin.permissions as Record<string, any>) }
       : {};
@@ -683,6 +714,7 @@ export class AdminService {
     const updated = await this.prisma.adminUser.update({
       where: { id: adminId },
       data: {
+        username: cleanUsername !== undefined ? cleanUsername : undefined,
         fullName: dto.fullName !== undefined && dto.fullName.trim().length > 0 ? dto.fullName.trim() : undefined,
         email: dto.email !== undefined && dto.email.trim().length > 0 ? dto.email.trim().toLowerCase() : undefined,
         permissions: currentPermissions,
