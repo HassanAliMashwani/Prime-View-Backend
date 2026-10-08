@@ -12,11 +12,30 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SubmitReceiptDto } from './dto/submit-receipt.dto';
 import { VerifyReceiptDto } from './dto/verify-receipt.dto';
 import { RejectReceiptDto } from './dto/reject-receipt.dto';
-import { ReceiptStatus } from '@prisma/client';
+import { Prisma, ReceiptStatus } from '@prisma/client';
 
 import { StorageService } from '../storage/storage.service';
 import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
 import { maybeAllotIfFullyPaid } from '../plots/update-plot-status';
+
+const lightweightReceiptSelect = {
+  id: true,
+  customerId: true,
+  bookingId: true,
+  paymentRecordId: true,
+  depositoryBank: true,
+  transactionRef: true,
+  paymentDate: true,
+  amount: true,
+  paymentKind: true,
+  status: true,
+  verifiedByAdminId: true,
+  verifiedAt: true,
+  rejectionReason: true,
+  slipNumber: true,
+  securityHash: true,
+  uploadedAt: true,
+};
 
 @Injectable()
 export class ReceiptsService {
@@ -468,6 +487,17 @@ export class ReceiptsService {
       });
       const paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
 
+      const receiptIds = receipts.map((r) => r.id);
+      let photoMap = new Map<string, boolean>();
+      if (receiptIds.length > 0) {
+        const photos = await tx.$queryRaw<Array<{ id: string; hasPhoto: boolean }>>`
+          SELECT id, (pg_column_size("receiptFileUrl") > 1) AS "hasPhoto"
+          FROM "ReceiptSubmission"
+          WHERE id IN (${Prisma.join(receiptIds)})
+        `;
+        photoMap = new Map(photos.map((p) => [p.id, Boolean(p.hasPhoto)]));
+      }
+
       return receipts.map((r) => {
         const booking = bookingMap.get(r.bookingId);
         const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
@@ -476,7 +506,7 @@ export class ReceiptsService {
 
         return {
           ...r,
-          hasPhoto: true,
+          hasPhoto: photoMap.get(r.id) ?? false,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           customerName: r.customer?.fullName || '',
           membershipNo: r.customer?.membershipNo || '',
@@ -526,8 +556,33 @@ export class ReceiptsService {
 
       const receipts = await tx.receiptSubmission.findMany({
         where: { customerId },
+        select: lightweightReceiptSelect,
         orderBy: { uploadedAt: 'desc' },
       });
+
+      const receiptIds = receipts.map((r) => r.id);
+      let photoMap = new Map<string, { hasPhoto: boolean; receiptFileUrl: string | null }>();
+      if (receiptIds.length > 0) {
+        const photos = await tx.$queryRaw<Array<{ id: string; hasPhoto: boolean; receiptFileUrl: string | null }>>`
+          SELECT id,
+                 (pg_column_size("receiptFileUrl") > 1) AS "hasPhoto",
+                 CASE
+                   WHEN pg_column_size("receiptFileUrl") > 18 THEN "receiptFileUrl"
+                   ELSE NULL
+                 END AS "receiptFileUrl"
+          FROM "ReceiptSubmission"
+          WHERE id IN (${Prisma.join(receiptIds)})
+        `;
+        photoMap = new Map(
+          photos.map((p) => {
+            let key = p.receiptFileUrl;
+            if (key && (key.startsWith('data:') || key.startsWith('blob:'))) {
+              key = null;
+            }
+            return [p.id, { hasPhoto: Boolean(p.hasPhoto), receiptFileUrl: key }];
+          })
+        );
+      }
 
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
@@ -547,9 +602,12 @@ export class ReceiptsService {
         const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
         const plotNumber = booking?.plot?.plotNumber || '';
         const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
+        const photoInfo = photoMap.get(r.id);
 
         return {
           ...r,
+          hasPhoto: photoInfo?.hasPhoto ?? false,
+          receiptFileUrl: photoInfo?.receiptFileUrl ?? null,
           customerName: customer?.fullName || (r as any).customerName || '',
           membershipNo: customer?.membershipNo || (r as any).membershipNo || '',
           customerPhone: customer?.phone,
@@ -740,8 +798,27 @@ export class ReceiptsService {
     const receipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findUnique({
         where: { id: receiptId },
-        include: {
-          customer: true,
+        select: {
+          id: true,
+          status: true,
+          paymentKind: true,
+          bookingId: true,
+          paymentRecordId: true,
+          amount: true,
+          paymentDate: true,
+          transactionRef: true,
+          customerId: true,
+          previewData: true,
+          customer: {
+            select: {
+              id: true,
+              fullName: true,
+              membershipNo: true,
+              phone: true,
+              cnic: true,
+              strikeCount: true,
+            },
+          },
         },
       });
     });
@@ -779,6 +856,7 @@ export class ReceiptsService {
           slipNumber,
           securityHash,
         },
+        select: lightweightReceiptSelect,
       });
 
       let finalAllocations: any = null;
@@ -991,8 +1069,18 @@ export class ReceiptsService {
     const receipt = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.receiptSubmission.findUnique({
         where: { id: receiptId },
-        include: {
-          customer: true,
+        select: {
+          id: true,
+          status: true,
+          customerId: true,
+          customer: {
+            select: {
+              id: true,
+              fullName: true,
+              membershipNo: true,
+              strikeCount: true,
+            },
+          },
         },
       });
     });
@@ -1025,6 +1113,7 @@ export class ReceiptsService {
           verifiedByAdminId: session.adminId || session.username,
           verifiedAt: now,
         },
+        select: lightweightReceiptSelect,
       });
 
       let strikeAssigned = false;
@@ -1113,10 +1202,20 @@ export class ReceiptsService {
       async (tx) => {
         const receipt = await tx.receiptSubmission.findUnique({
           where: { slipNumber: cleanSlipNumber },
-          include: {
+          select: {
+            slipNumber: true,
+            securityHash: true,
+            amount: true,
+            paymentDate: true,
+            status: true,
+            depositoryBank: true,
+            transactionRef: true,
+            verifiedAt: true,
+            bookingId: true,
+            paymentRecordId: true,
             customer: {
               select: { fullName: true, membershipNo: true }
-            }
+            },
           },
         });
 

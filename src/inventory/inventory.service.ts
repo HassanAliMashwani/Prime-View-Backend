@@ -300,10 +300,12 @@ export class InventoryService {
         FROM "Plot" p
         LEFT JOIN "PlotStatusHistory" psh ON psh."plotId" = p."id"
         LEFT JOIN (
-          SELECT "plotId", "toStatus",
-                 ROW_NUMBER() OVER(PARTITION BY "plotId" ORDER BY "changedAt" DESC) as rn
-          FROM "PlotStatusHistory"
-          WHERE "changedAt" <= ${toEnd}
+          SELECT psh."plotId", psh."toStatus",
+                 ROW_NUMBER() OVER(PARTITION BY psh."plotId" ORDER BY psh."changedAt" DESC) as rn
+          FROM "PlotStatusHistory" psh
+          JOIN "Plot" p2 ON p2."id" = psh."plotId"
+          WHERE psh."changedAt" <= ${toEnd}
+            AND p2."blockId" IN (${Prisma.join(allBlockIds)})
         ) latest ON latest."plotId" = p."id" AND latest.rn = 1
         WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
           AND p."category" != 'amenity'
@@ -348,67 +350,68 @@ export class InventoryService {
       totals.total = totals.available + totals.reserved + totals.booked + totals.allotted;
 
       // 2. Monthly timeline series aggregation
-      const historyRows = await tx.$queryRaw<Array<{
-        plotId: string;
-        toStatus: string;
-        changedAt: Date;
-        category: string;
-      }>>`
-        SELECT psh."plotId", psh."toStatus", psh."changedAt", p."category"
-        FROM "PlotStatusHistory" psh
-        JOIN "Plot" p ON p."id" = psh."plotId"
-        WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
-          AND p."category" != 'amenity'
-          AND psh."changedAt" <= ${maxEnd}
-        ORDER BY psh."changedAt" ASC
-      `;
+      let monthly: MonthlyHistoryPoint[] = [];
 
-      const monthly: MonthlyHistoryPoint[] = months.map((m) => {
-        const mStartMs = m.start.getTime();
-        const mEndMs = m.end.getTime();
+      if (months.length > 0) {
+        const monthSqlRows = months.map(
+          (m) => Prisma.sql`SELECT ${m.month} AS month, ${m.start}::timestamptz AS m_start, ${m.end}::timestamptz AS m_end`
+        );
 
-        const reservedPlotIds = new Set<string>();
-        const bookedPlotIds = new Set<string>();
-        const latestStatusMap = new Map<string, string>();
+        const monthlyRows = await tx.$queryRaw<Array<{
+          month: string;
+          reserved: number;
+          booked: number;
+          available: number;
+        }>>`
+          WITH m_list AS (
+            ${Prisma.join(monthSqlRows, ' UNION ALL ')}
+          )
+          SELECT
+            m.month,
+            COALESCE(act.reserved, 0)::int AS reserved,
+            COALESCE(act.booked, 0)::int AS booked,
+            COALESCE(avail.available, 0)::int AS available
+          FROM m_list m
+          LEFT JOIN LATERAL (
+            SELECT
+              COUNT(DISTINCT CASE WHEN psh."toStatus" = 'reserved' THEN psh."plotId" END) AS reserved,
+              COUNT(DISTINCT CASE WHEN psh."toStatus" = 'booked' THEN psh."plotId" END) AS booked
+            FROM "PlotStatusHistory" psh
+            JOIN "Plot" p ON p."id" = psh."plotId"
+            WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+              AND psh."changedAt" >= m.m_start
+              AND psh."changedAt" <= m.m_end
+              AND psh."toStatus" IN ('reserved', 'booked')
+          ) act ON TRUE
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*)::int AS available
+            FROM (
+              SELECT DISTINCT ON (psh."plotId") psh."toStatus"
+              FROM "PlotStatusHistory" psh
+              JOIN "Plot" p ON p."id" = psh."plotId"
+              WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+                AND p."category" != 'amenity'
+                AND psh."changedAt" <= m.m_end
+              ORDER BY psh."plotId", psh."changedAt" DESC
+            ) latest
+            WHERE latest."toStatus" = 'available'
+          ) avail ON TRUE
+          ORDER BY m.m_start ASC
+        `;
 
-        for (const row of historyRows) {
-          const time = new Date(row.changedAt).getTime();
-          if (time <= mEndMs) {
-            if (row.category !== 'amenity') {
-              latestStatusMap.set(row.plotId, row.toStatus);
-            }
-            if (time >= mStartMs) {
-              if (row.toStatus === 'reserved') {
-                reservedPlotIds.add(row.plotId);
-              } else if (row.toStatus === 'booked') {
-                bookedPlotIds.add(row.plotId);
-              }
-            }
-          }
-        }
+        const rowMap = new Map(monthlyRows.map((r) => [r.month, r]));
 
-        let availableCount = 0;
-        for (const st of latestStatusMap.values()) {
-          if (st === 'available') {
-            availableCount++;
-          }
-        }
-
-        return {
-          month: m.month,
-          label: m.label,
-          year: m.year,
-          available: availableCount,
-          reserved: reservedPlotIds.size,
-          booked: bookedPlotIds.size,
-        };
-      });
-
-      if (monthly.length > 0) {
-        const lastIdx = monthly.length - 1;
-        monthly[lastIdx].available = totals.available;
-        monthly[lastIdx].reserved = totals.reserved;
-        monthly[lastIdx].booked = totals.booked;
+        monthly = months.map((m) => {
+          const row = rowMap.get(m.month);
+          return {
+            month: m.month,
+            label: m.label,
+            year: m.year,
+            available: Number(row?.available || 0),
+            reserved: Number(row?.reserved || 0),
+            booked: Number(row?.booked || 0),
+          };
+        });
       }
 
       const page = Math.max(1, parseInt(query?.page || '1', 10));
