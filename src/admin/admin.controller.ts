@@ -51,6 +51,14 @@ export class AdminController {
     return this.adminService.getAuditLogs(session, { page, pageSize, search, actorId, entityType, action, startDate, endDate });
   }
 
+  @Get('audit/:id')
+  async getAuditLogDiff(
+    @CurrentSession() session: any,
+    @Param('id') id: string,
+  ) {
+    return this.adminService.getAuditLogDiff(session, id);
+  }
+
   @Post('sub-admins')
   @HttpCode(HttpStatus.CREATED)
   async createSubAdmin(

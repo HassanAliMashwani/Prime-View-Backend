@@ -6,6 +6,7 @@ import {
   ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { CreateSubAdminDto } from './dto/create-sub-admin.dto';
@@ -66,15 +67,75 @@ export class AdminService {
     let totalCount = 0;
     const logs = await this.prisma.withScopedSession(session, async (tx) => {
       totalCount = await tx.auditEntry.count({ where });
-      return tx.auditEntry.findMany({
+      const entries = await tx.auditEntry.findMany({
         where,
         skip,
         take,
         orderBy: { timestamp: 'desc' },
+        select: {
+          id: true,
+          timestamp: true,
+          actorId: true,
+          actorName: true,
+          actorRole: true,
+          action: true,
+          entityType: true,
+          entityId: true,
+          details: true,
+        },
       });
+
+      const entryIds = entries.map((e) => e.id);
+      let diffMap = new Map<string, boolean>();
+      if (entryIds.length > 0) {
+        const diffs = await tx.$queryRaw<Array<{ id: string; hasDiff: boolean }>>`
+          SELECT id, ("oldValue" IS NOT NULL OR "newValue" IS NOT NULL) AS "hasDiff"
+          FROM "AuditEntry"
+          WHERE id IN (${Prisma.join(entryIds)})
+        `;
+        diffMap = new Map(diffs.map((d) => [d.id, Boolean(d.hasDiff)]));
+      }
+
+      return entries.map((e) => ({
+        ...e,
+        hasDiff: diffMap.get(e.id) ?? false,
+      }));
     });
 
     return { ok: true, logs, totalCount, page: parsedPage, pageSize: parsedPageSize };
+  }
+
+  /**
+   * GET /admin/audit/:id
+   * Retrieve diff details (oldValue and newValue) for a single audit log entry (Super Admin exclusive).
+   */
+  async getAuditLogDiff(session: any, id: string) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Audit log inspection is strictly restricted to Super Administrators.',
+      });
+    }
+
+    const log = await this.prisma.withScopedSession(session, async (tx) => {
+      return tx.auditEntry.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          oldValue: true,
+          newValue: true,
+        },
+      });
+    });
+
+    if (!log) {
+      throw new NotFoundException({
+        error: 'AUDIT_LOG_NOT_FOUND',
+        message: 'Audit log entry not found.',
+      });
+    }
+
+    return { ok: true, id: log.id, oldValue: log.oldValue, newValue: log.newValue };
   }
 
   /**
