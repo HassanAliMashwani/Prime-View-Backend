@@ -15,6 +15,7 @@ import {
   FeeType,
   PaymentStatus,
   PlotStatus,
+  ReservationStatus,
   GeneratedDocType,
   DocumentType,
 } from '@prisma/client';
@@ -238,17 +239,29 @@ export class CustomersService {
             select: { fileUrl: true },
             take: 1,
           },
+          strikes: {
+            select: {
+              id: true,
+              reason: true,
+              assignedAt: true,
+              assignedBy: true,
+            },
+            orderBy: { assignedAt: 'desc' },
+          },
           _count: {
             select: { strikes: true }
           },
           bookings: {
             select: {
+              id: true,
+              paymentType: true,
+              bookingDate: true,
               plot: {
-                select: { id: true, blockId: true, plotNumber: true, price: true }
+                select: { id: true, blockId: true, plotNumber: true, size: true, price: true, category: true }
               },
               payments: {
                 where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment'] } },
-                select: { paidAmount: true }
+                select: { feeType: true, status: true, paidAmount: true }
               }
             }
           }
@@ -260,22 +273,51 @@ export class CustomersService {
         let plotCount = 0;
         let totalPaid = 0;
         let outstandingTotal = 0;
-        const plots: { plotId: string; blockId: string; plotNumber: string }[] = [];
+        let installmentsPaidCount = 0;
+        let installmentsDueCount = 0;
+        const plots: any[] = [];
 
         c.bookings.forEach(b => {
           if (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId))) {
             plotCount++;
             plots.push({
+              id: b.plot.id,
               plotId: b.plot.id,
+              bookingId: b.id,
               blockId: b.plot.blockId,
+              block: b.plot.blockId,
+              blockName: b.plot.blockId,
               plotNumber: b.plot.plotNumber,
+              size: b.plot.size || '',
+              category: b.plot.category || 'residential',
+              price: Number(b.plot.price || 0),
+              paymentType: (b.paymentType as any) || 'installment',
+              bookingDate: b.bookingDate ? b.bookingDate.toISOString().split('T')[0] : '',
             });
             const price = Number(b.plot.price || 0);
             const paid = b.payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
             totalPaid += paid;
             outstandingTotal += Math.max(0, price - paid);
+
+            b.payments.forEach(p => {
+              if (p.feeType === 'plot_installment') {
+                if (p.status === 'paid') {
+                  installmentsPaidCount++;
+                } else {
+                  installmentsDueCount++;
+                }
+              }
+            });
           }
         });
+
+        const strikeHistory = (c.strikes || []).map(s => ({
+          id: s.id,
+          reason: s.reason,
+          date: s.assignedAt ? s.assignedAt.toISOString() : '',
+          assignedAt: s.assignedAt ? s.assignedAt.toISOString() : '',
+          assignedBy: s.assignedBy || 'Super Admin',
+        }));
 
         return {
           id: c.id,
@@ -287,10 +329,13 @@ export class CustomersService {
           accountStatus: c.accountStatus,
           registrationStatus: c.registrationStatus,
           credentialsPending: c.credentialsPending,
-          strikeCount: c._count.strikes,
+          strikeCount: c.strikes?.length || c._count.strikes,
+          strikeHistory,
           applicantPhotoUrl: c.documents?.[0]?.fileUrl || undefined,
           plotCount,
           plots,
+          installmentsPaidCount,
+          installmentsDueCount,
           totalPaid,
           outstandingTotal
         };
@@ -376,6 +421,14 @@ export class CustomersService {
       throw new BadRequestException({
         error: 'PRICE_NOT_SET',
         message: 'Plot has an official price of 0 and cannot be booked',
+      });
+    }
+
+    const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+    if (!cnicRegex.test(dto.cnic.trim())) {
+      throw new BadRequestException({
+        error: 'INVALID_CNIC',
+        message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
       });
     }
 
@@ -498,6 +551,20 @@ export class CustomersService {
         },
       });
 
+      // Supersede active and confirmed reservations on that plot
+      await tx.reservation.updateMany({
+        where: {
+          plotId: plot.id,
+          status: { in: [ReservationStatus.active, ReservationStatus.confirmed] },
+        },
+        data: {
+          status: ReservationStatus.superseded,
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by minimal booking ${bookingId}`,
+        },
+      });
+
       return { customer, booking: newBooking, plot: updatedPlot, doc };
     });
 
@@ -552,6 +619,16 @@ export class CustomersService {
         error: 'ALREADY_COMPLETE',
         message: 'Customer registration is already complete.',
       });
+    }
+
+    if (dto.nokCnic) {
+      const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+      if (!cnicRegex.test(dto.nokCnic)) {
+        throw new BadRequestException({
+          error: 'INVALID_CNIC',
+          message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+        });
+      }
     }
 
     const targetMembershipNo = dto.membershipNo.trim();
@@ -887,6 +964,20 @@ export class CustomersService {
 
     const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
 
+    const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+    if (!cnicRegex.test(dto.cnic)) {
+      throw new BadRequestException({
+        error: 'INVALID_CNIC',
+        message: 'Customer CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+      });
+    }
+    if (dto.nokCnic && !cnicRegex.test(dto.nokCnic)) {
+      throw new BadRequestException({
+        error: 'INVALID_CNIC',
+        message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+      });
+    }
+
     // Membership uniqueness check
     const targetMembershipNo = dto.membershipNo.trim();
     const dupMem = await this.prisma.withScopedSession(session, async (tx) => {
@@ -1138,6 +1229,20 @@ export class CustomersService {
             plotNumber: plot.plotNumber,
             totalPrice: Number(plot.price),
           },
+        },
+      });
+
+      // Supersede active and confirmed reservations on that plot
+      await tx.reservation.updateMany({
+        where: {
+          plotId: plot.id,
+          status: { in: [ReservationStatus.active, ReservationStatus.confirmed] },
+        },
+        data: {
+          status: ReservationStatus.superseded,
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by booking ${bookingId}`,
         },
       });
 
@@ -1396,6 +1501,20 @@ export class CustomersService {
             plotNumber: plot.plotNumber,
             totalPrice: Number(plot.price),
           },
+        },
+      });
+
+      // Supersede active and confirmed reservations on that plot
+      await tx.reservation.updateMany({
+        where: {
+          plotId: plot.id,
+          status: { in: [ReservationStatus.active, ReservationStatus.confirmed] },
+        },
+        data: {
+          status: ReservationStatus.superseded,
+          supersededAt: now,
+          supersededByBookingId: bookingId,
+          resolutionNote: `Superseded by booking ${bookingId}`,
         },
       });
 

@@ -23,4 +23,8 @@ export class AddBookingDto {
   @IsString()
   @IsOptional()
   lockToken?: string;
+
+  @IsString()
+  @IsOptional()
+  reservationId?: string;
 }

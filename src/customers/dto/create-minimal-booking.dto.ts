@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, Matches } from 'class-validator';
 
 export class CreateMinimalBookingDto {
   @IsString()
@@ -11,6 +11,9 @@ export class CreateMinimalBookingDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   cnic: string;
 
   @IsString()
@@ -20,4 +23,8 @@ export class CreateMinimalBookingDto {
   @IsString()
   @IsOptional()
   lockToken?: string;
+
+  @IsString()
+  @IsOptional()
+  reservationId?: string;
 }

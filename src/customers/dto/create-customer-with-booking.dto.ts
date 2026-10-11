@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, ValidateNested, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 import { InstallmentPlanDto } from '../../plots/dto/book-plot.dto';
 
@@ -25,6 +25,9 @@ export class CreateCustomerWithBookingDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   cnic: string;
 
   @IsString()
@@ -45,6 +48,9 @@ export class CreateCustomerWithBookingDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   nokCnic: string;
 
   @ValidateNested()
@@ -63,6 +69,10 @@ export class CreateCustomerWithBookingDto {
   @IsString()
   @IsOptional()
   lockToken?: string;
+
+  @IsString()
+  @IsOptional()
+  reservationId?: string;
 
   @IsString()
   @IsOptional()

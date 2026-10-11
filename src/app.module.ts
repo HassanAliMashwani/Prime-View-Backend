@@ -18,6 +18,7 @@ import { SalesModule } from './sales/sales.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { HealthModule } from './health/health.module';
 import { JobsModule } from './jobs/jobs.module';
+import { InquiriesModule } from './inquiries/inquiries.module';
 
 @Module({
   imports: [
@@ -41,6 +42,7 @@ import { JobsModule } from './jobs/jobs.module';
     InventoryModule,
     HealthModule,
     JobsModule,
+    InquiriesModule,
   ],
   controllers: [],
   providers: [

@@ -412,3 +412,13 @@ model AuditEntry {
   @@index([entityType, entityId])
   @@index([actorId])
 }
+
+// ── 10. Public Contact Inquiries ──
+model Inquiry {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String
+  message   String
+  consent   Boolean
+  createdAt DateTime @default(now())
+}
