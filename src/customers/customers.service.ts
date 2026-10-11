@@ -699,6 +699,9 @@ export class CustomersService {
       if (dto.city) {
         customerUpdateData.city = dto.city.trim();
       }
+      if (dto.cnic) {
+        customerUpdateData.cnic = dto.cnic.trim();
+      }
 
       const updatedCustomer = await tx.customer.update({
         where: { id: customer.id },
@@ -1894,6 +1897,7 @@ export class CustomersService {
           fatherOrHusbandName: dto.fatherOrHusbandName !== undefined ? dto.fatherOrHusbandName.trim() : undefined,
           nokName: dto.nokName !== undefined ? dto.nokName.trim() : undefined,
           nokCnic: dto.nokCnic !== undefined ? dto.nokCnic.trim() : undefined,
+          cnic: dto.cnic !== undefined ? dto.cnic.trim() : undefined,
         },
       });
 

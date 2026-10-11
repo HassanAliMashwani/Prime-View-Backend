@@ -468,6 +468,7 @@ export class ReceiptsService {
               phone: true,
               cnic: true,
               strikeCount: true,
+              fatherOrHusbandName: true,
             },
           },
         },
@@ -512,11 +513,15 @@ export class ReceiptsService {
           membershipNo: r.customer?.membershipNo || '',
           customerPhone: r.customer?.phone,
           customerCnic: r.customer?.cnic,
+          fatherOrHusbandName: r.customer?.fatherOrHusbandName || '',
           customerStrikeCount: r.customer?.strikeCount || 0,
           customerStrikeHistory: [],
           plotId: booking?.plot?.id,
           plotNumber,
           blockName,
+          plotSize: booking?.plot?.size || '',
+          plotCategory: booking?.plot?.category || '',
+          feeType: paymentRecord?.feeType || '',
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
           slip: r.slipNumber ? {
@@ -551,6 +556,7 @@ export class ReceiptsService {
           membershipNo: true,
           phone: true,
           cnic: true,
+          fatherOrHusbandName: true,
         },
       });
 
@@ -612,10 +618,14 @@ export class ReceiptsService {
           membershipNo: customer?.membershipNo || (r as any).membershipNo || '',
           customerPhone: customer?.phone,
           customerCnic: customer?.cnic,
+          fatherOrHusbandName: customer?.fatherOrHusbandName || '',
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           plotId: booking?.plot?.id,
           plotNumber,
           blockName,
+          plotSize: booking?.plot?.size || '',
+          plotCategory: booking?.plot?.category || '',
+          feeType: paymentRecord?.feeType || '',
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
           slip: r.slipNumber ? {
@@ -817,6 +827,7 @@ export class ReceiptsService {
               phone: true,
               cnic: true,
               strikeCount: true,
+              fatherOrHusbandName: true,
             },
           },
         },
@@ -926,20 +937,26 @@ export class ReceiptsService {
              });
            }
         }
-      } else if (receipt.paymentRecordId) {
+      }
+
+      let paymentFeeType: string | null = null;
+      if (receipt.paymentRecordId) {
         const currentPr = await tx.paymentRecord.findUnique({
           where: { id: receipt.paymentRecordId },
         });
-        if (currentPr && currentPr.status !== 'paid') {
-          await tx.paymentRecord.update({
-            where: { id: receipt.paymentRecordId },
-            data: {
-              status: 'paid',
-              paidAmount: receipt.amount,
-              paidDate: currentPr.paidDate ?? receipt.paymentDate,
-              transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
-            },
-          });
+        if (currentPr) {
+          paymentFeeType = currentPr.feeType;
+          if (currentPr.status !== 'paid') {
+            await tx.paymentRecord.update({
+              where: { id: receipt.paymentRecordId },
+              data: {
+                status: 'paid',
+                paidAmount: receipt.amount,
+                paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+              },
+            });
+          }
         }
       }
 
@@ -961,6 +978,8 @@ export class ReceiptsService {
       const plotId = booking?.plotId || booking?.plot?.id || null;
       const plotNumber = booking?.plot?.plotNumber || null;
       const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
+      const plotSize = booking?.plot?.size || null;
+      const plotCategory = booking?.plot?.category || null;
 
       if (plotPromoted && booking?.plot) {
         promotedPlotId = booking.plot.id;
@@ -1001,7 +1020,19 @@ export class ReceiptsService {
         },
       });
 
-      return { receipt: updatedReceipt, plotPromoted, promotedPlotId, promotedPlotNumber, promotedBlockId, plotId, plotNumber, blockName };
+      return {
+        receipt: updatedReceipt,
+        plotPromoted,
+        promotedPlotId,
+        promotedPlotNumber,
+        promotedBlockId,
+        plotId,
+        plotNumber,
+        blockName,
+        plotSize,
+        plotCategory,
+        feeType: paymentFeeType,
+      };
     });
 
 
@@ -1038,8 +1069,14 @@ export class ReceiptsService {
         ...result.receipt,
         customerName: receipt.customer?.fullName,
         membershipNo: receipt.customer?.membershipNo,
+        customerCnic: receipt.customer?.cnic,
+        fatherOrHusbandName: receipt.customer?.fatherOrHusbandName,
+        customer: receipt.customer,
         plotNumber: result.plotNumber,
         blockName: result.blockName,
+        plotSize: result.plotSize,
+        plotCategory: result.plotCategory,
+        feeType: result.feeType,
         slip: {
           slipNumber,
           securityHash,
@@ -1200,7 +1237,7 @@ export class ReceiptsService {
     const verifiedData = await this.prisma.withScopedSession(
       { role: 'super_admin' },
       async (tx) => {
-        const receipt = await tx.receiptSubmission.findUnique({
+        let receipt = await tx.receiptSubmission.findUnique({
           where: { slipNumber: cleanSlipNumber },
           select: {
             slipNumber: true,
@@ -1214,10 +1251,52 @@ export class ReceiptsService {
             bookingId: true,
             paymentRecordId: true,
             customer: {
-              select: { fullName: true, membershipNo: true }
+              select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
             },
           },
         });
+
+        if (!receipt && cleanSlipNumber.toUpperCase() !== cleanSlipNumber) {
+          receipt = await tx.receiptSubmission.findUnique({
+            where: { slipNumber: cleanSlipNumber.toUpperCase() },
+            select: {
+              slipNumber: true,
+              securityHash: true,
+              amount: true,
+              paymentDate: true,
+              status: true,
+              depositoryBank: true,
+              transactionRef: true,
+              verifiedAt: true,
+              bookingId: true,
+              paymentRecordId: true,
+              customer: {
+                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
+              },
+            },
+          });
+        }
+
+        if (!receipt) {
+          receipt = await tx.receiptSubmission.findFirst({
+            where: { slipNumber: { equals: cleanSlipNumber, mode: 'insensitive' } },
+            select: {
+              slipNumber: true,
+              securityHash: true,
+              amount: true,
+              paymentDate: true,
+              status: true,
+              depositoryBank: true,
+              transactionRef: true,
+              verifiedAt: true,
+              bookingId: true,
+              paymentRecordId: true,
+              customer: {
+                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
+              },
+            },
+          });
+        }
 
         if (!receipt) {
           return null;
@@ -1232,6 +1311,8 @@ export class ReceiptsService {
                 plot: {
                   select: {
                     plotNumber: true,
+                    size: true,
+                    category: true,
                     block: { select: { name: true } }
                   }
                 }
@@ -1241,6 +1322,7 @@ export class ReceiptsService {
 
         let installmentNumber: number | null = null;
         let isOneTime = booking?.paymentType === 'one_time';
+        let feeType: string | null = null;
 
         if (receipt.paymentRecordId) {
           const pr = await tx.paymentRecord.findUnique({
@@ -1248,6 +1330,7 @@ export class ReceiptsService {
             select: { feeType: true, installmentNumber: true },
           });
           if (pr) {
+            feeType = pr.feeType;
             if (pr.feeType === 'plot_one_time') isOneTime = true;
             if (pr.installmentNumber !== null && pr.installmentNumber !== undefined) {
               installmentNumber = pr.installmentNumber;
@@ -1264,9 +1347,17 @@ export class ReceiptsService {
           exists: true,
           slipNumber: receipt.slipNumber,
           memberDisplayName,
+          customerName: receipt.customer?.fullName || null,
+          fatherOrHusbandName: receipt.customer?.fatherOrHusbandName || null,
+          customerCnic: receipt.customer?.cnic || null,
+          cnic: receipt.customer?.cnic || null,
           membershipNo: receipt.customer?.membershipNo || null,
           plotNumber: booking?.plot?.plotNumber || null,
           blockName: booking?.plot?.block?.name || null,
+          plotSize: booking?.plot?.size || null,
+          plotCategory: booking?.plot?.category || null,
+          feeType,
+          paymentType: booking?.paymentType || null,
           installmentNumber: isOneTime ? null : installmentNumber,
           paymentDetails,
           amount: receipt.amount,

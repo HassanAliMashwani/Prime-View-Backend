@@ -74,4 +74,8 @@ export class CompleteRegistrationDto {
   @IsString()
   @IsOptional()
   city?: string;
+
+  @IsString()
+  @IsOptional()
+  cnic?: string;
 }

@@ -32,4 +32,8 @@ export class UpdateCustomerProfileDto {
   @IsOptional()
   @IsString()
   applicantPhotoUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  cnic?: string;
 }
