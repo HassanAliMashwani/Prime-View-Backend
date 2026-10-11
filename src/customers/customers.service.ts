@@ -622,12 +622,15 @@ export class CustomersService {
     }
 
     if (dto.nokCnic) {
-      const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
-      if (!cnicRegex.test(dto.nokCnic)) {
-        throw new BadRequestException({
-          error: 'INVALID_CNIC',
-          message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
-        });
+      const isUnchanged = Boolean(customer.nokCnic && dto.nokCnic.trim() === customer.nokCnic.trim());
+      if (!isUnchanged) {
+        const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+        if (!cnicRegex.test(dto.nokCnic)) {
+          throw new BadRequestException({
+            error: 'INVALID_CNIC',
+            message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+          });
+        }
       }
     }
 
