@@ -83,6 +83,9 @@ enum ReceiptStatus {
   pending
   verified
   rejected
+  cancelled
+  replaced
+  payment_reversed
 }
 
 enum ReceiptNumberReservationStatus {
@@ -346,6 +349,18 @@ model ReceiptSubmission {
   paymentRecordIdSnapshot  String?
   issuedByNameSnapshot     String?
   issuedAtSnapshot         DateTime?
+
+  // Phase 4 Lifecycle Tracking
+  cancelledAt                 DateTime?
+  cancelledByAdminId          String?
+  cancellationReasonCode      String?
+  cancellationReason          String?
+  paymentReversedAt           DateTime?
+  paymentReversedByAdminId    String?
+  paymentReversalReasonCode   String?
+  replacesReceiptId           String?            @unique
+  replacesReceipt             ReceiptSubmission? @relation("ReceiptReplacement", fields: [replacesReceiptId], references: [id], onDelete: Restrict)
+  replacedBy                  ReceiptSubmission? @relation("ReceiptReplacement")
 
   @@index([customerId, status])
   @@index([status, uploadedAt])
