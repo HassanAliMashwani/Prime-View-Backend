@@ -85,6 +85,19 @@ enum ReceiptStatus {
   rejected
 }
 
+enum ReceiptNumberReservationStatus {
+  RESERVED
+  CONSUMED
+  ABANDONED
+}
+
+enum ReceiptApprovalIdempotencyStatus {
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  STALE
+}
+
 enum DocumentType {
   applicant_photo
   cnic_copy
@@ -313,6 +326,7 @@ model ReceiptSubmission {
   verifiedAt        DateTime?
   rejectionReason   String?
   slipNumber        String?       @unique
+  slipNumberFormatVersion Int?
   securityHash      String?
   uploadedAt        DateTime      @default(now())
   allocations       PaymentAllocation[]
@@ -333,6 +347,31 @@ model PaymentAllocation {
 
   @@index([receiptId])
   @@index([paymentRecordId])
+}
+
+model ReceiptNumberReservation {
+  id          String                         @id @default(uuid())
+  slipNumber  String                         @unique
+  status      ReceiptNumberReservationStatus @default(RESERVED)
+  receiptId   String?
+  createdAt   DateTime                       @default(now())
+  updatedAt   DateTime                       @updatedAt
+
+  @@index([status])
+}
+
+model ReceiptApprovalIdempotency {
+  id           String                           @id @default(uuid())
+  key          String                           @unique
+  receiptId    String
+  status       ReceiptApprovalIdempotencyStatus @default(PROCESSING)
+  requestHash  String?
+  response     Json?
+  createdAt    DateTime                         @default(now())
+  updatedAt    DateTime                         @updatedAt
+
+  @@index([receiptId])
+  @@index([status])
 }
 
 // ── 6. Physical Customer Documents (uploaded by admin) ──
