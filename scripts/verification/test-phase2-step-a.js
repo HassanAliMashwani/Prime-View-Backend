@@ -133,7 +133,9 @@ async function run() {
   const oldData = await resOld.json();
   assert.strictEqual(oldData.exists, true, 'Old slip must exist');
   assert.strictEqual(oldData.slipNumber, 'PV-SLIP-2026-9264', 'Old slip number must match');
-  console.log(`✓ PV-SLIP-2026-9264 still opens and verifies successfully`);
+  assert.strictEqual(oldData.verificationToken, undefined, 'Old slip public response must not return verificationToken');
+  assert.strictEqual(oldData.qrTarget, undefined, 'Old slip public response must not return qrTarget');
+  console.log(`✓ PV-SLIP-2026-9264 still opens and verifies successfully without token or qrTarget`);
 
   // Verify new receipt also verifies via public verify by token
   const resVerifyToken = await fetch(`${BASE_URL}/receipts/verify/${token}`);
@@ -141,7 +143,18 @@ async function run() {
   const verifyTokenData = await resVerifyToken.json();
   assert.strictEqual(verifyTokenData.exists, true, 'New slip must exist when queried by token');
   assert.strictEqual(verifyTokenData.slipNumber, slip?.slipNumber, 'Slip number must match');
-  console.log(`✓ New receipt successfully verified by token via public API: /verify/${token}`);
+  assert.strictEqual(verifyTokenData.verificationToken, undefined, 'New slip public response must not return verificationToken');
+  assert.strictEqual(verifyTokenData.qrTarget, undefined, 'New slip public response must not return qrTarget');
+  console.log(`✓ New receipt successfully verified by token via public API: /verify/${token} (no token/qrTarget leak)`);
+
+  // Verify new receipt also verifies via public verify by slipNumber
+  const resVerifySlip = await fetch(`${BASE_URL}/receipts/verify/${slip.slipNumber}`);
+  assert.strictEqual(resVerifySlip.status, 200, `Verify by slipNumber should return 200, got ${resVerifySlip.status}`);
+  const verifySlipData = await resVerifySlip.json();
+  assert.strictEqual(verifySlipData.exists, true, 'New slip must exist when queried by slipNumber');
+  assert.strictEqual(verifySlipData.verificationToken, undefined, 'New slip public response must not return verificationToken');
+  assert.strictEqual(verifySlipData.qrTarget, undefined, 'New slip public response must not return qrTarget');
+  console.log(`✓ New receipt successfully verified by slipNumber via public API: /verify/${slip.slipNumber} (no token/qrTarget leak)`);
 
   console.log('\n====================================================');
   console.log('   ALL PHASE 2 STEP A CHECKS PASSED!');

@@ -1110,9 +1110,18 @@ export class ReceiptsService {
 
         const verificationToken = crypto.randomBytes(32).toString('base64url');
         const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
-        const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4'))
-          ? rawOrigin
-          : 'http://localhost:3000';
+        const isProduction = process.env.NODE_ENV === 'production';
+        let verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
+        if (!verifyOrigin) {
+          if (!isProduction) {
+            verifyOrigin = 'http://localhost:3000';
+          } else {
+            throw new ServiceUnavailableException({
+              error: 'PUBLIC_VERIFY_ORIGIN_MISSING',
+              message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured in production.',
+            });
+          }
+        }
         const qrTarget = `${verifyOrigin}/verify/${verificationToken}`;
 
         // ── 5. UPDATE RECEIPT, PAYMENT, ALLOCATION, AUDIT IN SAME TX ────────
@@ -1705,8 +1714,6 @@ export class ReceiptsService {
         return {
           exists: true,
           slipNumber: receipt.slipNumber,
-          verificationToken: receipt.verificationToken || null,
-          qrTarget: receipt.qrTarget || null,
           memberDisplayName,
           customerName: receipt.customer?.fullName || null,
           fatherOrHusbandName: receipt.customer?.fatherOrHusbandName || null,
