@@ -1817,20 +1817,7 @@ export class ReceiptsService {
           }
         }
 
-        const rawCnic = receipt.customer?.cnic || '';
-        const cnicDigits = rawCnic.replace(/\D/g, '');
-        const maskedCnic = cnicDigits.length >= 4
-          ? `***********${cnicDigits.slice(-4)}`
-          : (rawCnic ? '***********' : null);
-
-        const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
-        const paymentDetails = isOneTime
-          ? 'Payment: full upfront / one-time'
-          : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
-
         // Check cryptographic HMAC integrity if hashKeyVersion is set
-        let publicStatus: string = receipt.status;
-
         if (receipt.hashKeyVersion !== null && receipt.hashKeyVersion !== undefined) {
           const canonicalString = buildReceiptCanonicalString({
             receiptId: receipt.id,
@@ -1859,38 +1846,88 @@ export class ReceiptsService {
             isMatch = timingSafeCompare(receipt.integrityHash, computedHash);
           }
 
-          if (isMatch) {
-            publicStatus = receipt.status;
-          } else {
-            publicStatus = 'integrity_mismatch';
+          if (!isMatch) {
+            return {
+              exists: true,
+              status: 'integrity_mismatch',
+              slipNumber: receipt.slipNumber || cleanSlipNumber,
+            };
           }
         }
 
-        const isSigned = Boolean(receipt.integrityHash);
+        const isSigned = receipt.hashKeyVersion !== null && receipt.hashKeyVersion !== undefined;
+
+        const rawCnic = isSigned && receipt.cnicLast4Snapshot
+          ? receipt.cnicLast4Snapshot
+          : (receipt.customer?.cnic || '');
+        const cnicDigits = rawCnic.replace(/\D/g, '');
+        const maskedCnic = cnicDigits.length >= 4
+          ? `***********${cnicDigits.slice(-4)}`
+          : (rawCnic ? '***********' : null);
+
+        const memberDisplayName = isSigned && receipt.memberNameSnapshot
+          ? receipt.memberNameSnapshot
+          : (receipt.customer?.fullName || 'Valued Member');
+
+        const membershipNo = isSigned && receipt.membershipNumberSnapshot !== undefined
+          ? receipt.membershipNumberSnapshot
+          : (receipt.customer?.membershipNo || null);
+
+        const plotNumber = isSigned && receipt.plotNumberSnapshot !== undefined
+          ? receipt.plotNumberSnapshot
+          : (booking?.plot?.plotNumber || null);
+
+        const blockName = isSigned && receipt.blockNameSnapshot !== undefined
+          ? receipt.blockNameSnapshot
+          : (booking?.plot?.block?.name || null);
+
+        const amount = isSigned && receipt.amountSnapshot !== null && receipt.amountSnapshot !== undefined
+          ? receipt.amountSnapshot
+          : receipt.amount;
+
+        const paymentDateVal = isSigned && receipt.paymentDateSnapshot
+          ? receipt.paymentDateSnapshot
+          : receipt.paymentDate;
+
+        const paymentDate = paymentDateVal
+          ? (paymentDateVal instanceof Date ? paymentDateVal.toISOString().split('T')[0] : String(paymentDateVal).split('T')[0])
+          : null;
+
+        const paymentDetails = isOneTime
+          ? 'Payment: full upfront / one-time'
+          : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
+
         const securityHashDisplay = isSigned && receipt.integrityHash
           ? receipt.integrityHash.substring(0, 16)
           : (receipt.securityHash || null);
 
-        return {
+        const responseObj: any = {
           exists: true,
-          status: publicStatus,
+          status: receipt.status,
           slipNumber: receipt.slipNumber,
           memberDisplayName,
+          customerName: memberDisplayName,
           cnic: maskedCnic,
-          membershipNo: receipt.customer?.membershipNo || null,
-          plotNumber: booking?.plot?.plotNumber || null,
-          blockName: booking?.plot?.block?.name || null,
+          membershipNo,
+          plotNumber,
+          blockName,
           plotSize: booking?.plot?.size || null,
           plotCategory: booking?.plot?.category || null,
           paymentType: booking?.paymentType || null,
           installmentLabel: paymentDetails,
-          amount: receipt.amount,
-          paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
+          amount,
+          paymentDate,
           securityHash: receipt.securityHash || null,
           securityHashDisplay,
           hashKeyVersion: receipt.hashKeyVersion ?? null,
           verifiedAt: receipt.verifiedAt ? (receipt.verifiedAt instanceof Date ? receipt.verifiedAt.toISOString().split('T')[0] : String(receipt.verifiedAt).split('T')[0]) : null,
         };
+
+        if (isSigned) {
+          responseObj.issuer = receipt.issuedByNameSnapshot || null;
+        }
+
+        return responseObj;
       }
     );
 
