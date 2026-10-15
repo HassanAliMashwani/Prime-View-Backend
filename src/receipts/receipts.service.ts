@@ -1857,38 +1857,42 @@ export class ReceiptsService {
 
         const isSigned = receipt.hashKeyVersion !== null && receipt.hashKeyVersion !== undefined;
 
-        const rawCnic = isSigned && receipt.cnicLast4Snapshot
-          ? receipt.cnicLast4Snapshot
-          : (receipt.customer?.cnic || '');
+        if (isSigned) {
+          const rawCnic = receipt.cnicLast4Snapshot || '';
+          const cnicDigits = rawCnic.replace(/\D/g, '');
+          const maskedCnic = cnicDigits.length >= 4
+            ? `***********${cnicDigits.slice(-4)}`
+            : (rawCnic ? `***********${rawCnic}` : null);
+
+          const paymentDateVal = receipt.paymentDateSnapshot;
+          const paymentDate = paymentDateVal
+            ? (paymentDateVal instanceof Date ? paymentDateVal.toISOString().split('T')[0] : String(paymentDateVal).split('T')[0])
+            : null;
+
+          return {
+            exists: true,
+            status: receipt.status,
+            slipNumber: receipt.slipNumber,
+            memberDisplayName: receipt.memberNameSnapshot || null,
+            cnic: maskedCnic,
+            membershipNo: receipt.membershipNumberSnapshot ?? null,
+            plotNumber: receipt.plotNumberSnapshot ?? null,
+            amount: receipt.amountSnapshot,
+            paymentDate,
+            issuer: receipt.issuedByNameSnapshot || null,
+            securityHashDisplay: receipt.integrityHash ? receipt.integrityHash.substring(0, 16) : null,
+            hashKeyVersion: receipt.hashKeyVersion,
+          };
+        }
+
+        const rawCnic = receipt.customer?.cnic || '';
         const cnicDigits = rawCnic.replace(/\D/g, '');
         const maskedCnic = cnicDigits.length >= 4
           ? `***********${cnicDigits.slice(-4)}`
           : (rawCnic ? '***********' : null);
 
-        const memberDisplayName = isSigned && receipt.memberNameSnapshot
-          ? receipt.memberNameSnapshot
-          : (receipt.customer?.fullName || 'Valued Member');
-
-        const membershipNo = isSigned && receipt.membershipNumberSnapshot !== undefined
-          ? receipt.membershipNumberSnapshot
-          : (receipt.customer?.membershipNo || null);
-
-        const plotNumber = isSigned && receipt.plotNumberSnapshot !== undefined
-          ? receipt.plotNumberSnapshot
-          : (booking?.plot?.plotNumber || null);
-
-        const blockName = isSigned && receipt.blockNameSnapshot !== undefined
-          ? receipt.blockNameSnapshot
-          : (booking?.plot?.block?.name || null);
-
-        const amount = isSigned && receipt.amountSnapshot !== null && receipt.amountSnapshot !== undefined
-          ? receipt.amountSnapshot
-          : receipt.amount;
-
-        const paymentDateVal = isSigned && receipt.paymentDateSnapshot
-          ? receipt.paymentDateSnapshot
-          : receipt.paymentDate;
-
+        const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
+        const paymentDateVal = receipt.paymentDate;
         const paymentDate = paymentDateVal
           ? (paymentDateVal instanceof Date ? paymentDateVal.toISOString().split('T')[0] : String(paymentDateVal).split('T')[0])
           : null;
@@ -1897,37 +1901,27 @@ export class ReceiptsService {
           ? 'Payment: full upfront / one-time'
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
 
-        const securityHashDisplay = isSigned && receipt.integrityHash
-          ? receipt.integrityHash.substring(0, 16)
-          : (receipt.securityHash || null);
-
-        const responseObj: any = {
+        return {
           exists: true,
           status: receipt.status,
           slipNumber: receipt.slipNumber,
           memberDisplayName,
           customerName: memberDisplayName,
           cnic: maskedCnic,
-          membershipNo,
-          plotNumber,
-          blockName,
+          membershipNo: receipt.customer?.membershipNo || null,
+          plotNumber: booking?.plot?.plotNumber || null,
+          blockName: booking?.plot?.block?.name || null,
           plotSize: booking?.plot?.size || null,
           plotCategory: booking?.plot?.category || null,
           paymentType: booking?.paymentType || null,
           installmentLabel: paymentDetails,
-          amount,
+          amount: receipt.amount,
           paymentDate,
           securityHash: receipt.securityHash || null,
-          securityHashDisplay,
-          hashKeyVersion: receipt.hashKeyVersion ?? null,
+          securityHashDisplay: receipt.securityHash || null,
+          hashKeyVersion: null,
           verifiedAt: receipt.verifiedAt ? (receipt.verifiedAt instanceof Date ? receipt.verifiedAt.toISOString().split('T')[0] : String(receipt.verifiedAt).split('T')[0]) : null,
         };
-
-        if (isSigned) {
-          responseObj.issuer = receipt.issuedByNameSnapshot || null;
-        }
-
-        return responseObj;
       }
     );
 
