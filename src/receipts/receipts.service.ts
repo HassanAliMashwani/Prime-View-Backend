@@ -14,11 +14,12 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SubmitReceiptDto } from './dto/submit-receipt.dto';
 import { VerifyReceiptDto } from './dto/verify-receipt.dto';
 import { RejectReceiptDto } from './dto/reject-receipt.dto';
-import { Prisma, ReceiptStatus } from '@prisma/client';
+import { CancelReceiptDto } from './dto/cancel-receipt.dto';
+import { Prisma, ReceiptStatus, PlotStatus } from '@prisma/client';
 
 import { StorageService } from '../storage/storage.service';
 import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
-import { maybeAllotIfFullyPaid } from '../plots/update-plot-status';
+import { updatePlotStatus, maybeAllotIfFullyPaid } from '../plots/update-plot-status';
 import { generateSlipNumber } from './receipt-number.generator';
 
 export function formatCanonicalVal(val: any): string {
@@ -1564,6 +1565,432 @@ export class ReceiptsService {
   }
 
   /**
+   * 4b. POST /receipts/:id/cancel
+   * Cancel an already verified receipt and undo its payment.
+   * Only super_admin may call.
+   */
+  async cancelReceipt(
+    receiptId: string,
+    dto: CancelReceiptDto,
+    session: any,
+    idempotencyKey?: string,
+  ) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'Only super_admin can cancel a receipt.',
+      });
+    }
+
+    if (
+      !dto.reasonCode ||
+      !['administrative_error', 'duplicate_receipt'].includes(dto.reasonCode)
+    ) {
+      throw new BadRequestException({
+        error: 'INVALID_REASON_CODE',
+        message: 'reasonCode must be either administrative_error or duplicate_receipt.',
+      });
+    }
+
+    if (!dto.reason || typeof dto.reason !== 'string' || !dto.reason.trim()) {
+      throw new BadRequestException({
+        error: 'INVALID_REASON',
+        message: 'Reason must be non-empty.',
+      });
+    }
+
+    if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+      throw new BadRequestException({
+        error: 'MISSING_IDEMPOTENCY_KEY',
+        message: 'Idempotency-Key header is required for receipt cancellation.',
+      });
+    }
+    const cleanIdempotencyKey = idempotencyKey.trim();
+
+    const requestPayload = {
+      action: 'cancel',
+      reasonCode: dto.reasonCode,
+      reason: dto.reason.trim(),
+    };
+    const requestHash = crypto
+      .createHash('sha256')
+      .update(JSON.stringify(requestPayload))
+      .digest('hex');
+
+    return await this.prisma.withScopedSession(session, async (tx) => {
+      // ── 1. IDEMPOTENCY LOCK & DEDUPLICATION ──────────────────────────────
+      let idempRow = await tx.receiptApprovalIdempotency.findUnique({
+        where: { key: cleanIdempotencyKey },
+      });
+
+      if (idempRow) {
+        await tx.$executeRawUnsafe(
+          `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+          cleanIdempotencyKey,
+        );
+        idempRow = await tx.receiptApprovalIdempotency.findUnique({
+          where: { key: cleanIdempotencyKey },
+        });
+      } else {
+        try {
+          idempRow = await tx.receiptApprovalIdempotency.create({
+            data: {
+              key: cleanIdempotencyKey,
+              receiptId,
+              status: 'PROCESSING',
+              requestHash,
+            },
+          });
+          await tx.$executeRawUnsafe(
+            `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+            cleanIdempotencyKey,
+          );
+        } catch (createErr: any) {
+          if (
+            createErr.code === 'P2002' ||
+            createErr.message?.includes('unique') ||
+            createErr.message?.includes('duplicate key')
+          ) {
+            await tx.$executeRawUnsafe(
+              `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+              cleanIdempotencyKey,
+            );
+            idempRow = await tx.receiptApprovalIdempotency.findUnique({
+              where: { key: cleanIdempotencyKey },
+            });
+          } else {
+            throw createErr;
+          }
+        }
+      }
+
+      if (!idempRow) {
+        throw new BadRequestException({
+          error: 'IDEMPOTENCY_INIT_FAILED',
+          message: 'Could not initialize idempotency context.',
+        });
+      }
+
+      if (idempRow.receiptId !== receiptId) {
+        throw new ConflictException({
+          error: 'IDEMPOTENCY_KEY_MISMATCH',
+          message: 'This Idempotency-Key is already associated with another receipt.',
+        });
+      }
+
+      if (idempRow.requestHash && idempRow.requestHash !== requestHash) {
+        throw new ConflictException({
+          error: 'IDEMPOTENCY_PAYLOAD_MISMATCH',
+          message: 'Same idempotency key cannot be used with different request payload.',
+        });
+      }
+
+      if (idempRow.status === 'SUCCEEDED' && idempRow.response) {
+        return idempRow.response;
+      }
+
+      await tx.receiptApprovalIdempotency.update({
+        where: { key: cleanIdempotencyKey },
+        data: {
+          status: 'PROCESSING',
+          requestHash,
+        },
+      });
+
+      // ── 2. PRE-FETCH TO PREPARE LOCK ORDER ──────────────────────────────
+      const preReceipt = await tx.receiptSubmission.findUnique({
+        where: { id: receiptId },
+        select: {
+          id: true,
+          bookingId: true,
+          paymentRecordId: true,
+          status: true,
+        },
+      });
+
+      if (!preReceipt) {
+        throw new NotFoundException({
+          error: 'RECEIPT_NOT_FOUND',
+          message: 'Receipt submission not found.',
+        });
+      }
+
+      // ── 3. STRICT LOCK ORDER: Booking → Payment → Receipt ──────────────
+      if (preReceipt.bookingId) {
+        await tx.$executeRawUnsafe(
+          `SELECT 1 FROM "Booking" WHERE id = $1 FOR UPDATE`,
+          preReceipt.bookingId,
+        );
+      }
+
+      if (preReceipt.paymentRecordId) {
+        await tx.$executeRawUnsafe(
+          `SELECT 1 FROM "PaymentRecord" WHERE id = $1 FOR UPDATE`,
+          preReceipt.paymentRecordId,
+        );
+      }
+
+      await tx.$executeRawUnsafe(
+        `SELECT 1 FROM "ReceiptSubmission" WHERE id = $1 FOR UPDATE`,
+        receiptId,
+      );
+
+      // Re-fetch receipt with full details
+      const receipt = await tx.receiptSubmission.findUnique({
+        where: { id: receiptId },
+        include: {
+          customer: true,
+          allocations: true,
+        },
+      });
+
+      if (!receipt) {
+        throw new NotFoundException({
+          error: 'RECEIPT_NOT_FOUND',
+          message: 'Receipt submission not found.',
+        });
+      }
+
+      // ── 4. 409 GUARDS ───────────────────────────────────────────────────
+      // If status is pending, rejected, cancelled, replaced, or payment_reversed: return 409
+      if (receipt.status !== 'verified') {
+        throw new ConflictException({
+          error: 'RECEIPT_NOT_VERIFIED',
+          message: `Cannot cancel receipt with status '${receipt.status}'. Only verified receipts can be cancelled.`,
+        });
+      }
+
+      // If paymentKind is balloon, or any PaymentAllocation exists: return 409
+      if (receipt.paymentKind === 'balloon') {
+        throw new ConflictException({
+          error: 'BALLOON_RECEIPT_CANNOT_BE_CANCELLED',
+          message: 'Balloon payment receipts cannot be cancelled.',
+        });
+      }
+
+      if (receipt.allocations && receipt.allocations.length > 0) {
+        throw new ConflictException({
+          error: 'RECEIPT_HAS_ALLOCATIONS',
+          message: 'Receipts with payment allocations cannot be cancelled.',
+        });
+      }
+
+      if (!receipt.paymentRecordId) {
+        throw new ConflictException({
+          error: 'NO_PAYMENT_RECORD',
+          message: 'Receipt has no associated payment record.',
+        });
+      }
+
+      const payment = await tx.paymentRecord.findUnique({
+        where: { id: receipt.paymentRecordId },
+      });
+
+      if (!payment) {
+        throw new ConflictException({
+          error: 'PAYMENT_RECORD_NOT_FOUND',
+          message: 'Associated payment record not found.',
+        });
+      }
+
+      // If paidAmount is not equal to this receipt's amount: return 409
+      if (Number(payment.paidAmount) !== Number(receipt.amount)) {
+        throw new ConflictException({
+          error: 'PAID_AMOUNT_MISMATCH',
+          message: 'Payment record paidAmount does not match receipt amount.',
+        });
+      }
+
+      // If another verified receipt points at the same paymentRecordId: return 409
+      const conflictingReceipt = await tx.receiptSubmission.findFirst({
+        where: {
+          paymentRecordId: receipt.paymentRecordId,
+          status: 'verified',
+          NOT: { id: receipt.id },
+        },
+      });
+
+      if (conflictingReceipt) {
+        throw new ConflictException({
+          error: 'CONFLICTING_RECEIPT',
+          message: 'Another verified receipt points to the same payment record.',
+        });
+      }
+
+      // If paidDate does not match this receipt's payment date, or transactionRef does not match: return 409
+      const paymentDateStr = payment.paidDate
+        ? (payment.paidDate instanceof Date
+            ? payment.paidDate.toISOString().split('T')[0]
+            : String(payment.paidDate).split('T')[0])
+        : null;
+      const receiptDateStr = receipt.paymentDate
+        ? (receipt.paymentDate instanceof Date
+            ? receipt.paymentDate.toISOString().split('T')[0]
+            : String(receipt.paymentDate).split('T')[0])
+        : null;
+
+      if (!paymentDateStr || paymentDateStr !== receiptDateStr) {
+        throw new ConflictException({
+          error: 'PAID_DATE_MISMATCH',
+          message: 'Payment record paidDate does not match receipt paymentDate.',
+        });
+      }
+
+      if (
+        !payment.transactionRef ||
+        payment.transactionRef.trim() !== receipt.transactionRef.trim()
+      ) {
+        throw new ConflictException({
+          error: 'TRANSACTION_REF_MISMATCH',
+          message: 'Payment record transactionRef does not match receipt transactionRef.',
+        });
+      }
+
+      const now = new Date();
+
+      // ── 5. EXECUTE CANCELLATION & PAYMENT ROLLBACK ───────────────────────
+      // A. Receipt status becomes cancelled
+      const updatedReceipt = await tx.receiptSubmission.update({
+        where: { id: receiptId },
+        data: {
+          status: 'cancelled',
+          cancelledAt: now,
+          cancelledByAdminId: session.adminId || session.username,
+          cancellationReasonCode: dto.reasonCode,
+          cancellationReason: dto.reason.trim(),
+        },
+      });
+
+      // B. Payment status becomes overdue when dueDate is before today, otherwise pending; paidAmount = 0, paidDate = null, transactionRef = null
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      const isOverdue = payment.dueDate ? new Date(payment.dueDate) < startOfToday : false;
+      const newPaymentStatus = isOverdue ? 'overdue' : 'pending';
+
+      const updatedPayment = await tx.paymentRecord.update({
+        where: { id: payment.id },
+        data: {
+          status: newPaymentStatus,
+          paidAmount: 0,
+          paidDate: null,
+          transactionRef: null,
+        },
+      });
+
+      // C. Change the plot from allotted to booked only when the latest PlotStatusHistory entry
+      // is the automatic booked-to-allotted entry for this booking and the booking is no longer fully paid.
+      let plotReverted = false;
+      const booking = receipt.bookingId
+        ? await tx.booking.findUnique({
+            where: { id: receipt.bookingId },
+            include: { plot: true },
+          })
+        : null;
+
+      if (booking?.plot && booking.plot.status === PlotStatus.allotted) {
+        const latestHistory = await tx.plotStatusHistory.findFirst({
+          where: { plotId: booking.plot.id },
+          orderBy: { changedAt: 'desc' },
+        });
+
+        const isAutoAllotForThisBooking =
+          latestHistory &&
+          latestHistory.fromStatus === PlotStatus.booked &&
+          latestHistory.toStatus === PlotStatus.allotted &&
+          latestHistory.source === 'auto_allot_fully_paid' &&
+          Boolean(latestHistory.reason && latestHistory.reason.includes(booking.id));
+
+        if (isAutoAllotForThisBooking) {
+          const allBookingPayments = await tx.paymentRecord.findMany({
+            where: { bookingId: booking.id },
+          });
+          const stillFullyPaid = allBookingPayments.every(
+            (p) => p.status === 'paid' && Number(p.paidAmount) >= Number(p.amount),
+          );
+
+          if (!stillFullyPaid) {
+            await updatePlotStatus(tx, {
+              plotId: booking.plot.id,
+              fromStatus: PlotStatus.allotted,
+              toStatus: PlotStatus.booked,
+              changedBy: session.adminId || session.username || 'system',
+              source: 'receipt_cancellation_undo_allot',
+              reason: `Receipt ${receipt.slipNumber || receipt.id} cancelled; booking ${booking.id} no longer fully paid`,
+            });
+
+            await tx.auditEntry.create({
+              data: {
+                actorId: session.adminId || session.username,
+                actorName: session.fullName || session.username,
+                actorRole: session.role,
+                action: 'PLOT_STATUS_CHANGED',
+                entityType: 'plot',
+                entityId: booking.plot.id,
+                details: `Plot ${booking.plot.plotNumber} reverted from 'allotted' to 'booked' due to cancellation of receipt ${receipt.slipNumber || receiptId}`,
+                oldValue: { status: 'allotted' },
+                newValue: { status: 'booked' },
+              },
+            });
+
+            plotReverted = true;
+          }
+        }
+      }
+
+      // D. AuditEntry in the same transaction
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'RECEIPT_CANCELLED',
+          entityType: 'receipt',
+          entityId: receiptId,
+          details: `Cancelled receipt ${receipt.slipNumber || receiptId} (${dto.reasonCode}): ${dto.reason.trim()}`,
+          newValue: {
+            status: 'cancelled',
+            slipNumber: receipt.slipNumber,
+            reasonCode: dto.reasonCode,
+            reason: dto.reason.trim(),
+            cancelledBy: session.adminId || session.username,
+            cancelledAt: now.toISOString(),
+          },
+        },
+      });
+
+      // E. Persist response in Idempotency row
+      const responsePayload = {
+        ok: true,
+        receipt: {
+          id: updatedReceipt.id,
+          slipNumber: updatedReceipt.slipNumber,
+          status: updatedReceipt.status,
+          cancelledAt: updatedReceipt.cancelledAt,
+          cancellationReasonCode: updatedReceipt.cancellationReasonCode,
+        },
+        paymentRecord: {
+          id: updatedPayment.id,
+          status: updatedPayment.status,
+          paidAmount: Number(updatedPayment.paidAmount),
+          paidDate: updatedPayment.paidDate,
+          transactionRef: updatedPayment.transactionRef,
+        },
+        plotReverted,
+      };
+
+      await tx.receiptApprovalIdempotency.update({
+        where: { key: cleanIdempotencyKey },
+        data: {
+          status: 'SUCCEEDED',
+          response: responsePayload,
+        },
+      });
+
+      return responsePayload;
+    });
+  }
+
+  /**
    * 5. POST /receipts/:id/reject
    * Reject a submitted payment receipt with reason.
    * Optionally assigns a strike to the member in the same transaction.
@@ -1742,6 +2169,7 @@ export class ReceiptsService {
           depositoryBank: true,
           transactionRef: true,
           verifiedAt: true,
+          cancelledAt: true,
           customer: {
             select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
           },
@@ -1853,6 +2281,24 @@ export class ReceiptsService {
               slipNumber: receipt.slipNumber || cleanSlipNumber,
             };
           }
+        }
+
+        // Post-HMAC status checks: cancelled, replaced, payment_reversed must not be treated as genuine
+        if (receipt.status === 'cancelled') {
+          return {
+            exists: true,
+            status: 'cancelled',
+            slipNumber: receipt.slipNumber,
+            cancelledAt: receipt.cancelledAt,
+          };
+        }
+
+        if (receipt.status === 'replaced' || receipt.status === 'payment_reversed') {
+          return {
+            exists: true,
+            status: receipt.status,
+            slipNumber: receipt.slipNumber,
+          };
         }
 
         const isSigned = receipt.hashKeyVersion !== null && receipt.hashKeyVersion !== undefined;
