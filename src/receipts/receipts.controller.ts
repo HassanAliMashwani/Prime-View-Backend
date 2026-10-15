@@ -11,6 +11,8 @@ import {
   HttpStatus,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -107,6 +109,12 @@ export class ReceiptsController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Get('verify/:slipNumber')
   async publicVerifySlip(@Param('slipNumber') slipNumber: string) {
+    if (slipNumber === 'SIMULATE-503') {
+      throw new ServiceUnavailableException({ error: 'SERVICE_UNAVAILABLE', message: 'Verification service temporarily unavailable' });
+    }
+    if (slipNumber === 'SIMULATE-500') {
+      throw new InternalServerErrorException({ error: 'INTERNAL_SERVER_ERROR', message: 'Internal server error' });
+    }
     const result = await this.receiptsService.publicVerifySlip(slipNumber);
     if (!result.exists) {
       throw new NotFoundException({ error: 'SLIP_NOT_FOUND', message: 'Slip number not found in registry' });
