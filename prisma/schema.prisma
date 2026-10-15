@@ -333,6 +333,20 @@ model ReceiptSubmission {
   uploadedAt        DateTime      @default(now())
   allocations       PaymentAllocation[]
 
+  // Phase 3 Integrity Snapshots & HMAC
+  integrityHash            String?
+  hashKeyVersion           Int?
+  memberNameSnapshot       String?
+  membershipNumberSnapshot String?
+  cnicLast4Snapshot        String?
+  plotNumberSnapshot       String?
+  blockNameSnapshot        String?
+  amountSnapshot           Decimal?       @db.Decimal(14, 2)
+  paymentDateSnapshot      DateTime?
+  paymentRecordIdSnapshot  String?
+  issuedByNameSnapshot     String?
+  issuedAtSnapshot         DateTime?
+
   @@index([customerId, status])
   @@index([status, uploadedAt])
 }

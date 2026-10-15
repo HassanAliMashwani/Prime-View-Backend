@@ -21,6 +21,83 @@ import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
 import { maybeAllotIfFullyPaid } from '../plots/update-plot-status';
 import { generateSlipNumber } from './receipt-number.generator';
 
+export function formatCanonicalVal(val: any): string {
+  if (val === null || val === undefined) {
+    return '<NULL>';
+  }
+  return String(val);
+}
+
+export function toAmountPaisa(amount: any): string {
+  if (amount === null || amount === undefined) {
+    return '<NULL>';
+  }
+  const dec = new Prisma.Decimal(amount);
+  return dec.mul(100).toFixed(0);
+}
+
+export function formatPaymentDate(date: any): string {
+  if (!date) return '<NULL>';
+  if (date instanceof Date) {
+    return date.toISOString().split('T')[0];
+  }
+  const str = String(date).trim();
+  if (!str) return '<NULL>';
+  return str.split('T')[0];
+}
+
+export function buildReceiptCanonicalString(params: {
+  receiptId: any;
+  slipNumber: any;
+  memberId: any;
+  memberName: any;
+  membershipNumber: any;
+  amount: any;
+  paymentDate: any;
+  plotId: any;
+  plotNumber: any;
+  paymentRecordId: any;
+  issuedByAdminId: any;
+  issuedByName: any;
+  issuedAt: any;
+}): string {
+  const formatIssuedAt = (d: any) => {
+    if (!d) return '<NULL>';
+    if (d instanceof Date) return d.toISOString();
+    const s = String(d).trim();
+    return s || '<NULL>';
+  };
+
+  return [
+    'v=1',
+    `receiptId=${formatCanonicalVal(params.receiptId)}`,
+    `slipNumber=${formatCanonicalVal(params.slipNumber)}`,
+    `memberId=${formatCanonicalVal(params.memberId)}`,
+    `memberName=${formatCanonicalVal(params.memberName)}`,
+    `membershipNumber=${formatCanonicalVal(params.membershipNumber)}`,
+    `amountPaisa=${toAmountPaisa(params.amount)}`,
+    `paymentDate=${formatPaymentDate(params.paymentDate)}`,
+    `plotId=${formatCanonicalVal(params.plotId)}`,
+    `plotNumber=${formatCanonicalVal(params.plotNumber)}`,
+    `paymentRecordId=${formatCanonicalVal(params.paymentRecordId)}`,
+    `issuedByAdminId=${formatCanonicalVal(params.issuedByAdminId)}`,
+    `issuedByName=${formatCanonicalVal(params.issuedByName)}`,
+    `issuedAt=${formatIssuedAt(params.issuedAt)}`,
+  ].join('|');
+}
+
+export function computeReceiptHmac(canonicalString: string, secret: string): string {
+  return crypto.createHmac('sha256', secret).update(canonicalString, 'utf8').digest('hex');
+}
+
+export function timingSafeCompare(hashA: string, hashB: string): boolean {
+  if (!hashA || !hashB) return false;
+  const bufA = Buffer.from(hashA, 'utf8');
+  const bufB = Buffer.from(hashB, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 const lightweightReceiptSelect = {
   id: true,
   customerId: true,
@@ -40,6 +117,7 @@ const lightweightReceiptSelect = {
   verificationToken: true,
   qrTarget: true,
   securityHash: true,
+  hashKeyVersion: true,
   uploadedAt: true,
 };
 
@@ -1124,18 +1202,88 @@ export class ReceiptsService {
         }
         const qrTarget = `${verifyOrigin}/verify/${verificationToken}`;
 
+        const booking = await tx.booking.findUnique({
+          where: { id: receipt.bookingId },
+          include: { plot: { include: { block: true } } },
+        });
+        const plotId = booking?.plotId || booking?.plot?.id || null;
+        const plotNumber = booking?.plot?.plotNumber || null;
+        const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
+        const plotSize = booking?.plot?.size || null;
+        const plotCategory = booking?.plot?.category || null;
+
+        const rawCnic = receipt.customer?.cnic || '';
+        const cnicDigits = rawCnic.replace(/\D/g, '');
+        const cnicLast4Snapshot = cnicDigits.length >= 4 ? cnicDigits.slice(-4) : (cnicDigits || null);
+        const issuedByName = session.fullName || session.username || null;
+        const issuedByAdminId = session.adminId || session.username || null;
+
         // ── 5. UPDATE RECEIPT, PAYMENT, ALLOCATION, AUDIT IN SAME TX ────────
-        const updatedReceipt = await tx.receiptSubmission.update({
+        // Save initial snapshots and approval
+        await tx.receiptSubmission.update({
           where: { id: receiptId },
           data: {
             status: 'verified',
-            verifiedByAdminId: session.adminId || session.username,
+            verifiedByAdminId: issuedByAdminId,
             verifiedAt: now,
             slipNumber,
             slipNumberFormatVersion: formatVersion,
             securityHash,
             verificationToken,
             qrTarget,
+            memberNameSnapshot: receipt.customer?.fullName ?? null,
+            membershipNumberSnapshot: receipt.customer?.membershipNo ?? null,
+            cnicLast4Snapshot,
+            plotNumberSnapshot: plotNumber,
+            blockNameSnapshot: blockName,
+            amountSnapshot: receipt.amount,
+            paymentDateSnapshot: receipt.paymentDate,
+            paymentRecordIdSnapshot: receipt.paymentRecordId ?? null,
+            issuedByNameSnapshot: issuedByName,
+            issuedAtSnapshot: now,
+          },
+        });
+
+        // Read issuedAt from the database, not from new Date() in the fingerprint
+        const dbRow = await tx.receiptSubmission.findUnique({
+          where: { id: receiptId },
+          select: { issuedAtSnapshot: true },
+        });
+        const dbIssuedAt = dbRow?.issuedAtSnapshot || now;
+
+        // Build canonical string
+        const canonicalString = buildReceiptCanonicalString({
+          receiptId: receipt.id,
+          slipNumber,
+          memberId: receipt.customerId,
+          memberName: receipt.customer?.fullName,
+          membershipNumber: receipt.customer?.membershipNo,
+          amount: receipt.amount,
+          paymentDate: receipt.paymentDate,
+          plotId,
+          plotNumber,
+          paymentRecordId: receipt.paymentRecordId,
+          issuedByAdminId,
+          issuedByName,
+          issuedAt: dbIssuedAt,
+        });
+
+        // Compute HMAC if secret present in env
+        const hmacSecret = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
+        let integrityHash: string | null = null;
+        let hashKeyVersion: number | null = null;
+
+        if (hmacSecret) {
+          integrityHash = computeReceiptHmac(canonicalString, hmacSecret);
+          hashKeyVersion = 1;
+        }
+
+        // Save integrityHash & hashKeyVersion
+        const updatedReceipt = await tx.receiptSubmission.update({
+          where: { id: receiptId },
+          data: {
+            integrityHash,
+            hashKeyVersion,
           },
           select: lightweightReceiptSelect,
         });
@@ -1237,16 +1385,6 @@ export class ReceiptsService {
         let promotedPlotNumber: string | null = null;
         let promotedBlockId: string | null = null;
 
-        const booking = await tx.booking.findUnique({
-          where: { id: receipt.bookingId },
-          include: { plot: { include: { block: true } } },
-        });
-        const plotId = booking?.plotId || booking?.plot?.id || null;
-        const plotNumber = booking?.plot?.plotNumber || null;
-        const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
-        const plotSize = booking?.plot?.size || null;
-        const plotCategory = booking?.plot?.category || null;
-
         if (plotPromoted && booking?.plot) {
           promotedPlotId = booking.plot.id;
           promotedPlotNumber = booking.plot.plotNumber;
@@ -1290,6 +1428,10 @@ export class ReceiptsService {
           data: { status: 'CONSUMED' },
         });
 
+        const securityHashDisplay = integrityHash
+          ? integrityHash.substring(0, 16)
+          : securityHash;
+
         const responsePayload = {
           ok: true,
           plotPromoted: plotPromoted || false,
@@ -1309,12 +1451,16 @@ export class ReceiptsService {
             feeType: paymentFeeType,
             verificationToken,
             qrTarget,
+            hashKeyVersion,
+            securityHashDisplay,
             slip: {
               slipNumber,
               securityHash,
+              securityHashDisplay,
+              hashKeyVersion,
               verificationToken,
               qrTarget,
-              generatedAt: now.toISOString(),
+              generatedAt: dbIssuedAt.toISOString(),
               qrPayload: qrTarget,
               societyAuthorityStamp: `OFFICIAL SOCIETY VERIFICATION • REG NO 411 KPK • VERIFIED BY ${(session.fullName || session.username).toUpperCase()}`,
             },
@@ -1576,6 +1722,8 @@ export class ReceiptsService {
             verificationToken: true,
             qrTarget: true,
             securityHash: true,
+            integrityHash: true,
+            hashKeyVersion: true,
             amount: true,
             paymentDate: true,
             status: true,
@@ -1600,6 +1748,8 @@ export class ReceiptsService {
               verificationToken: true,
               qrTarget: true,
               securityHash: true,
+              integrityHash: true,
+              hashKeyVersion: true,
               amount: true,
               paymentDate: true,
               status: true,
@@ -1625,6 +1775,8 @@ export class ReceiptsService {
               verificationToken: true,
               qrTarget: true,
               securityHash: true,
+              integrityHash: true,
+              hashKeyVersion: true,
               amount: true,
               paymentDate: true,
               status: true,
@@ -1651,6 +1803,8 @@ export class ReceiptsService {
               verificationToken: true,
               qrTarget: true,
               securityHash: true,
+              integrityHash: true,
+              hashKeyVersion: true,
               amount: true,
               paymentDate: true,
               status: true,
@@ -1717,6 +1871,11 @@ export class ReceiptsService {
           ? 'Payment: full upfront / one-time'
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
 
+        const isSigned = Boolean(receipt.integrityHash);
+        const securityHashDisplay = isSigned && receipt.integrityHash
+          ? receipt.integrityHash.substring(0, 16)
+          : (receipt.securityHash || null);
+
         return {
           exists: true,
           status: receipt.status,
@@ -1733,6 +1892,8 @@ export class ReceiptsService {
           amount: receipt.amount,
           paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
           securityHash: receipt.securityHash || null,
+          securityHashDisplay,
+          hashKeyVersion: receipt.hashKeyVersion ?? null,
           verifiedAt: receipt.verifiedAt ? (receipt.verifiedAt instanceof Date ? receipt.verifiedAt.toISOString().split('T')[0] : String(receipt.verifiedAt).split('T')[0]) : null,
         };
       }
