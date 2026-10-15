@@ -37,6 +37,8 @@ const lightweightReceiptSelect = {
   rejectionReason: true,
   slipNumber: true,
   slipNumberFormatVersion: true,
+  verificationToken: true,
+  qrTarget: true,
   securityHash: true,
   uploadedAt: true,
 };
@@ -462,6 +464,9 @@ export class ReceiptsService {
           verifiedAt: true,
           rejectionReason: true,
           slipNumber: true,
+          slipNumberFormatVersion: true,
+          verificationToken: true,
+          qrTarget: true,
           securityHash: true,
           uploadedAt: true,
           customer: {
@@ -528,9 +533,14 @@ export class ReceiptsService {
           feeType: paymentRecord?.feeType || '',
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
+          verificationToken: r.verificationToken ?? null,
+          qrTarget: r.qrTarget ?? null,
           slip: r.slipNumber ? {
             slipNumber: r.slipNumber,
             securityHash: r.securityHash,
+            verificationToken: r.verificationToken || undefined,
+            qrTarget: r.qrTarget || undefined,
+            qrPayload: r.qrTarget || `/verify/${r.slipNumber}`,
             verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
             verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
           } : undefined,
@@ -632,9 +642,14 @@ export class ReceiptsService {
           feeType: paymentRecord?.feeType || '',
           paymentType: booking?.paymentType,
           installmentNumber: paymentRecord?.installmentNumber,
+          verificationToken: r.verificationToken ?? null,
+          qrTarget: r.qrTarget ?? null,
           slip: r.slipNumber ? {
             slipNumber: r.slipNumber,
             securityHash: r.securityHash,
+            verificationToken: r.verificationToken || undefined,
+            qrTarget: r.qrTarget || undefined,
+            qrPayload: r.qrTarget || `/verify/${r.slipNumber}`,
             verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
             verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
           } : undefined,
@@ -1093,6 +1108,13 @@ export class ReceiptsService {
         const hexB = Math.random().toString(16).substring(2, 6).toUpperCase();
         const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
 
+        const verificationToken = crypto.randomBytes(32).toString('base64url');
+        const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
+        const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4'))
+          ? rawOrigin
+          : 'http://localhost:3000';
+        const qrTarget = `${verifyOrigin}/verify/${verificationToken}`;
+
         // ── 5. UPDATE RECEIPT, PAYMENT, ALLOCATION, AUDIT IN SAME TX ────────
         const updatedReceipt = await tx.receiptSubmission.update({
           where: { id: receiptId },
@@ -1103,6 +1125,8 @@ export class ReceiptsService {
             slipNumber,
             slipNumberFormatVersion: formatVersion,
             securityHash,
+            verificationToken,
+            qrTarget,
           },
           select: lightweightReceiptSelect,
         });
@@ -1274,11 +1298,15 @@ export class ReceiptsService {
             plotSize,
             plotCategory,
             feeType: paymentFeeType,
+            verificationToken,
+            qrTarget,
             slip: {
               slipNumber,
               securityHash,
+              verificationToken,
+              qrTarget,
               generatedAt: now.toISOString(),
-              qrPayload: `/verify/${slipNumber}`,
+              qrPayload: qrTarget,
               societyAuthorityStamp: `OFFICIAL SOCIETY VERIFICATION • REG NO 411 KPK • VERIFIED BY ${(session.fullName || session.username).toUpperCase()}`,
             },
           },
@@ -1533,7 +1561,11 @@ export class ReceiptsService {
         let receipt = await tx.receiptSubmission.findUnique({
           where: { slipNumber: cleanSlipNumber },
           select: {
+            id: true,
             slipNumber: true,
+            slipNumberFormatVersion: true,
+            verificationToken: true,
+            qrTarget: true,
             securityHash: true,
             amount: true,
             paymentDate: true,
@@ -1553,7 +1585,11 @@ export class ReceiptsService {
           receipt = await tx.receiptSubmission.findUnique({
             where: { slipNumber: cleanSlipNumber.toUpperCase() },
             select: {
+              id: true,
               slipNumber: true,
+              slipNumberFormatVersion: true,
+              verificationToken: true,
+              qrTarget: true,
               securityHash: true,
               amount: true,
               paymentDate: true,
@@ -1574,7 +1610,37 @@ export class ReceiptsService {
           receipt = await tx.receiptSubmission.findFirst({
             where: { slipNumber: { equals: cleanSlipNumber, mode: 'insensitive' } },
             select: {
+              id: true,
               slipNumber: true,
+              slipNumberFormatVersion: true,
+              verificationToken: true,
+              qrTarget: true,
+              securityHash: true,
+              amount: true,
+              paymentDate: true,
+              status: true,
+              depositoryBank: true,
+              transactionRef: true,
+              verifiedAt: true,
+              bookingId: true,
+              paymentRecordId: true,
+              customer: {
+                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
+              },
+            },
+          });
+        }
+
+        // Support lookup by verificationToken (for scanned QR targets)
+        if (!receipt) {
+          receipt = await tx.receiptSubmission.findUnique({
+            where: { verificationToken: cleanSlipNumber },
+            select: {
+              id: true,
+              slipNumber: true,
+              slipNumberFormatVersion: true,
+              verificationToken: true,
+              qrTarget: true,
               securityHash: true,
               amount: true,
               paymentDate: true,
@@ -1639,6 +1705,8 @@ export class ReceiptsService {
         return {
           exists: true,
           slipNumber: receipt.slipNumber,
+          verificationToken: receipt.verificationToken || null,
+          qrTarget: receipt.qrTarget || null,
           memberDisplayName,
           customerName: receipt.customer?.fullName || null,
           fatherOrHusbandName: receipt.customer?.fatherOrHusbandName || null,

@@ -328,6 +328,8 @@ model ReceiptSubmission {
   slipNumber        String?       @unique
   slipNumberFormatVersion Int?
   securityHash      String?
+  verificationToken String?       @unique
+  qrTarget          String?
   uploadedAt        DateTime      @default(now())
   allocations       PaymentAllocation[]
 
