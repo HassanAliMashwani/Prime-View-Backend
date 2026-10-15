@@ -5,10 +5,12 @@ import {
   Param,
   Body,
   Query,
+  Headers,
   UseGuards,
   HttpCode,
   HttpStatus,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ReceiptsService } from './receipts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -80,8 +82,15 @@ export class ReceiptsController {
     @Param('id') id: string,
     @Body() dto: VerifyReceiptDto,
     @CurrentSession() session: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.receiptsService.verifyReceipt(id, dto, session);
+    if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+      throw new BadRequestException({
+        error: 'MISSING_IDEMPOTENCY_KEY',
+        message: 'Idempotency-Key header is required for receipt verification.',
+      });
+    }
+    return this.receiptsService.verifyReceipt(id, dto, session, idempotencyKey.trim());
   }
 
   @Post(':id/reject')

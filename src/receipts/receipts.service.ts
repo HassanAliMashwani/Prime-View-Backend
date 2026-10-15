@@ -6,7 +6,9 @@ import {
   BadRequestException,
   UnprocessableEntityException,
   HttpException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { SubmitReceiptDto } from './dto/submit-receipt.dto';
@@ -34,6 +36,7 @@ const lightweightReceiptSelect = {
   verifiedAt: true,
   rejectionReason: true,
   slipNumber: true,
+  slipNumberFormatVersion: true,
   securityHash: true,
   uploadedAt: true,
 };
@@ -795,7 +798,7 @@ export class ReceiptsService {
    * Verify and approve a submitted payment receipt.
    * Generates official two-part slip, reconciles PaymentRecord, and logs audit.
    */
-  async verifyReceipt(receiptId: string, dto: VerifyReceiptDto, session: any) {
+  async verifyReceipt(receiptId: string, dto: VerifyReceiptDto, session: any, idempotencyKey?: string) {
     const isSuper = session.role === 'super_admin';
     const hasAuth = Boolean(session.permissions?.can_verify_receipts);
 
@@ -806,302 +809,575 @@ export class ReceiptsService {
       });
     }
 
-    const receipt = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.receiptSubmission.findUnique({
-        where: { id: receiptId },
-        select: {
-          id: true,
-          status: true,
-          paymentKind: true,
-          bookingId: true,
-          paymentRecordId: true,
-          amount: true,
-          paymentDate: true,
-          transactionRef: true,
-          customerId: true,
-          previewData: true,
-          customer: {
-            select: {
-              id: true,
-              fullName: true,
-              membershipNo: true,
-              phone: true,
-              cnic: true,
-              strikeCount: true,
-              fatherOrHusbandName: true,
-            },
-          },
-        },
-      });
-    });
-
-    if (!receipt) {
-      throw new NotFoundException({
-        error: 'RECEIPT_NOT_FOUND',
-        message: 'Receipt submission not found.',
+    if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+      throw new BadRequestException({
+        error: 'MISSING_IDEMPOTENCY_KEY',
+        message: 'Idempotency-Key header is required for receipt verification.',
       });
     }
+    const cleanIdempotencyKey = idempotencyKey.trim();
 
-    if (receipt.status !== 'pending') {
-      throw new ConflictException({
-        error: 'ALREADY_PROCESSED',
-        message: `Receipt has already been ${receipt.status}.`,
-      });
-    }
+    // Deterministic payload hash for body mismatch detection (409)
+    const requestPayload = {
+      notes: dto.notes ?? null,
+      confirmPreviewDrift: Boolean(dto.confirmPreviewDrift),
+    };
+    const requestHash = crypto.createHash('sha256').update(JSON.stringify(requestPayload)).digest('hex');
 
     const now = new Date();
     const year = now.getFullYear();
-
-    // Feature Flag: RECEIPT_NUMBER_FORMAT_VERSION (Default = 1)
-    // Version 1: Legacy 4-digit serial (e.g. PV-SLIP-2026-9264)
-    // Version 2: Cryptographically random 10-char Base32 serial (e.g. PV-SLIP-2026-K7M4Q9X2R8)
     const formatVersion = Number(process.env.RECEIPT_NUMBER_FORMAT_VERSION || '1');
-    let slipNumber: string;
-    let slipNumberFormatVersion: number;
 
-    if (formatVersion === 2) {
-      slipNumber = generateSlipNumber(year);
-      slipNumberFormatVersion = 2;
-    } else {
-      const randomSerial = Math.floor(1000 + Math.random() * 9000);
-      slipNumber = `PV-SLIP-${year}-${randomSerial}`;
-      slipNumberFormatVersion = 1;
-    }
+    let activeSlipNumber: string | null = null;
+    let activeReservationId: string | null = null;
+    let broadcastPayload: any = null;
+    let finalReturnResult: any = null;
 
-    const hexA = Math.random().toString(16).substring(2, 6).toUpperCase();
-    const hexB = Math.random().toString(16).substring(2, 6).toUpperCase();
-    const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
-
-    const result = await this.prisma.withScopedSession(session, async (tx) => {
-      // 1. Update Receipt
-      const updatedReceipt = await tx.receiptSubmission.update({
-        where: { id: receiptId },
-        data: {
-          status: 'verified',
-          verifiedByAdminId: session.adminId || session.username,
-          verifiedAt: now,
-          slipNumber,
-          slipNumberFormatVersion,
-          securityHash,
-        },
-        select: lightweightReceiptSelect,
-      });
-
-      let finalAllocations: any = null;
-      if (receipt.paymentKind === 'balloon') {
-        await tx.$executeRawUnsafe(`SELECT 1 FROM "Booking" WHERE id = $1 FOR UPDATE`, receipt.bookingId);
-        const payments = await tx.paymentRecord.findMany({
-          where: { bookingId: receipt.bookingId, feeType: 'plot_installment', status: { in: ['pending', 'overdue', 'partially_paid'] } }
+    try {
+      const result = await this.prisma.withScopedSession(session, async (tx) => {
+        // ── 1. IDEMPOTENCY LOCK & DEDUPLICATION ─────────────────────────────
+        // Ensure two approvals of one receipt cannot both succeed
+        const priorApproval = await tx.receiptApprovalIdempotency.findFirst({
+          where: {
+            receiptId,
+            status: 'SUCCEEDED',
+            NOT: { key: cleanIdempotencyKey },
+          },
         });
-        const pendingInst = payments.map((p) => ({
-          id: p.id,
-          installmentNumber: p.installmentNumber,
-          dueDate: p.dueDate,
-          amount: Number(p.amount),
-          paidAmount: Number(p.paidAmount),
-          status: p.status,
-        }));
-        
-        const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
-        if (engineResult.error) {
-           throw new UnprocessableEntityException({ error: 'BALLOON_ERROR', message: engineResult.error });
+        if (priorApproval) {
+          throw new ConflictException({
+            error: 'ALREADY_PROCESSED',
+            message: 'Receipt has already been approved by another officer action.',
+          });
         }
-        
-        const oldPreview = receipt.previewData || { allocations: [] };
-        
-        // Sort both allocation arrays by paymentRecordId to safely stringify and compare
-        const sortAllocations = (a: any[]) => 
-          [...a].map(alloc => ({
-            paymentRecordId: alloc.paymentRecordId,
-            amountApplied: alloc.amountApplied,
-            allocationType: alloc.allocationType
-          })).sort((x, y) => x.paymentRecordId.localeCompare(y.paymentRecordId));
-          
-        const oldSorted = JSON.stringify(sortAllocations((oldPreview as any).allocations || []));
-        const newSorted = JSON.stringify(sortAllocations(engineResult.allocations));
-        
-        if (oldSorted !== newSorted && !dto.confirmPreviewDrift) {
-           throw new ConflictException({
-             error: 'PREVIEW_DRIFT',
-             message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
-             newPreview: engineResult
-           });
-        }
-        finalAllocations = engineResult.allocations;
 
-        for (const alloc of finalAllocations) {
-           await tx.paymentAllocation.create({
-             data: {
-               receiptId,
-               paymentRecordId: alloc.paymentRecordId,
-               amountApplied: alloc.amountApplied,
-               allocationType: alloc.allocationType
-             }
-           });
-           
-           const currentPr = await tx.paymentRecord.findUnique({ where: { id: alloc.paymentRecordId } });
-           if (currentPr) {
-             const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
-             const newStatus = newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid';
-             await tx.paymentRecord.update({
-               where: { id: currentPr.id },
-               data: {
-                 paidAmount: newPaidAmount,
-                 status: newStatus,
-                 paidDate: currentPr.paidDate ?? receipt.paymentDate,
-                 transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
-               }
-             });
-           }
-        }
-      }
-
-      let paymentFeeType: string | null = null;
-      if (receipt.paymentRecordId) {
-        const currentPr = await tx.paymentRecord.findUnique({
-          where: { id: receipt.paymentRecordId },
+        // Lock / Reserve the idempotency row before other locks
+        let idempRow = await tx.receiptApprovalIdempotency.findUnique({
+          where: { key: cleanIdempotencyKey },
         });
-        if (currentPr) {
-          paymentFeeType = currentPr.feeType;
-          if (currentPr.status !== 'paid') {
-            await tx.paymentRecord.update({
-              where: { id: receipt.paymentRecordId },
+
+        if (idempRow) {
+          await tx.$executeRawUnsafe(
+            `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+            cleanIdempotencyKey
+          );
+          idempRow = await tx.receiptApprovalIdempotency.findUnique({
+            where: { key: cleanIdempotencyKey },
+          });
+        } else {
+          try {
+            idempRow = await tx.receiptApprovalIdempotency.create({
               data: {
-                status: 'paid',
-                paidAmount: receipt.amount,
-                paidDate: currentPr.paidDate ?? receipt.paymentDate,
-                transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+                key: cleanIdempotencyKey,
+                receiptId,
+                status: 'PROCESSING',
+                requestHash,
               },
             });
+            await tx.$executeRawUnsafe(
+              `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+              cleanIdempotencyKey
+            );
+          } catch (createErr: any) {
+            if (createErr.code === 'P2002' || createErr.message?.includes('unique') || createErr.message?.includes('duplicate key')) {
+              await tx.$executeRawUnsafe(
+                `SELECT 1 FROM "ReceiptApprovalIdempotency" WHERE "key" = $1 FOR UPDATE`,
+                cleanIdempotencyKey
+              );
+              idempRow = await tx.receiptApprovalIdempotency.findUnique({
+                where: { key: cleanIdempotencyKey },
+              });
+            } else {
+              throw createErr;
+            }
           }
         }
-      }
 
-      // ── P3-ALLOT-LAST: Auto-promote plot to 'allotted' when fully paid ──────────
-      const plotPromoted = await maybeAllotIfFullyPaid(
-        tx,
-        receipt.bookingId,
-        session.adminId || session.username || 'system',
-      );
+        if (!idempRow) {
+          throw new BadRequestException({
+            error: 'IDEMPOTENCY_INIT_FAILED',
+            message: 'Could not initialize idempotency context.',
+          });
+        }
 
-      let promotedPlotId: string | null = null;
-      let promotedPlotNumber: string | null = null;
-      let promotedBlockId: string | null = null;
+        // Verify key association and payload consistency
+        if (idempRow.receiptId !== receiptId) {
+          throw new ConflictException({
+            error: 'IDEMPOTENCY_KEY_MISMATCH',
+            message: 'This Idempotency-Key is already associated with another receipt.',
+          });
+        }
 
-      const booking = await tx.booking.findUnique({
-        where: { id: receipt.bookingId },
-        include: { plot: { include: { block: true } } },
-      });
-      const plotId = booking?.plotId || booking?.plot?.id || null;
-      const plotNumber = booking?.plot?.plotNumber || null;
-      const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
-      const plotSize = booking?.plot?.size || null;
-      const plotCategory = booking?.plot?.category || null;
+        if (idempRow.requestHash && idempRow.requestHash !== requestHash) {
+          throw new ConflictException({
+            error: 'IDEMPOTENCY_PAYLOAD_MISMATCH',
+            message: 'Same idempotency key cannot be used with different request payload.',
+          });
+        }
 
-      if (plotPromoted && booking?.plot) {
-        promotedPlotId = booking.plot.id;
-        promotedPlotNumber = booking.plot.plotNumber;
-        promotedBlockId = booking.plot.blockId;
+        // Same key + same body = stored result
+        if (idempRow.status === 'SUCCEEDED' && idempRow.response) {
+          return { isReplay: true, storedResponse: idempRow.response };
+        }
+
+        // Advance row to PROCESSING
+        await tx.receiptApprovalIdempotency.update({
+          where: { key: cleanIdempotencyKey },
+          data: {
+            status: 'PROCESSING',
+            requestHash,
+          },
+        });
+
+        // ── 2. PRE-FETCH TO PREPARE LOCKS ──────────────────────────────────
+        const preReceipt = await tx.receiptSubmission.findUnique({
+          where: { id: receiptId },
+          select: {
+            id: true,
+            status: true,
+            bookingId: true,
+            paymentRecordId: true,
+            paymentKind: true,
+          },
+        });
+
+        if (!preReceipt) {
+          throw new NotFoundException({
+            error: 'RECEIPT_NOT_FOUND',
+            message: 'Receipt submission not found.',
+          });
+        }
+
+        if (preReceipt.status !== 'pending') {
+          throw new ConflictException({
+            error: 'ALREADY_PROCESSED',
+            message: `Receipt has already been ${preReceipt.status}.`,
+          });
+        }
+
+        // ── 3. STRICT LOCK ORDER: booking → payment(s) by id → receipt ──────
+        // A. Booking lock
+        if (preReceipt.bookingId) {
+          await tx.$executeRawUnsafe(
+            `SELECT 1 FROM "Booking" WHERE id = $1 FOR UPDATE`,
+            preReceipt.bookingId
+          );
+        }
+
+        // B. Payment(s) lock sorted by id ASC
+        const paymentIdsToLock: string[] = [];
+        if (preReceipt.paymentRecordId) {
+          paymentIdsToLock.push(preReceipt.paymentRecordId);
+        }
+        if (preReceipt.paymentKind === 'balloon') {
+          const balloonPayments = await tx.paymentRecord.findMany({
+            where: {
+              bookingId: preReceipt.bookingId,
+              feeType: 'plot_installment',
+              status: { in: ['pending', 'overdue', 'partially_paid'] },
+            },
+            select: { id: true },
+          });
+          for (const bp of balloonPayments) {
+            paymentIdsToLock.push(bp.id);
+          }
+        }
+        const uniqueSortedPaymentIds = Array.from(new Set(paymentIdsToLock)).sort();
+        for (const pid of uniqueSortedPaymentIds) {
+          await tx.$executeRawUnsafe(
+            `SELECT 1 FROM "PaymentRecord" WHERE id = $1 FOR UPDATE`,
+            pid
+          );
+        }
+
+        // C. Receipt lock
+        await tx.$executeRawUnsafe(
+          `SELECT 1 FROM "ReceiptSubmission" WHERE id = $1 FOR UPDATE`,
+          receiptId
+        );
+
+        // Re-check after receipt lock that it is still pending
+        const receipt = await tx.receiptSubmission.findUnique({
+          where: { id: receiptId },
+          select: {
+            id: true,
+            status: true,
+            paymentKind: true,
+            bookingId: true,
+            paymentRecordId: true,
+            amount: true,
+            paymentDate: true,
+            transactionRef: true,
+            customerId: true,
+            previewData: true,
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                membershipNo: true,
+                phone: true,
+                cnic: true,
+                strikeCount: true,
+                fatherOrHusbandName: true,
+              },
+            },
+          },
+        });
+
+        if (!receipt || receipt.status !== 'pending') {
+          throw new ConflictException({
+            error: 'ALREADY_PROCESSED',
+            message: `Receipt has already been ${receipt?.status || 'processed'}.`,
+          });
+        }
+
+        // ── 4. RESERVE SLIP NUMBER (3 tries on unique collision, then 503) ──
+        let slipNumber: string | null = null;
+        let reservationId: string | null = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const candidate = formatVersion === 2
+            ? generateSlipNumber(year)
+            : `PV-SLIP-${year}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+          // Check against pre-existing receipts in ReceiptSubmission
+          const existingInReceipts = await tx.receiptSubmission.findUnique({
+            where: { slipNumber: candidate },
+            select: { id: true },
+          });
+          if (existingInReceipts) {
+            if (attempt === 3) {
+              throw new ServiceUnavailableException({
+                error: 'SLIP_NUMBER_COLLISION_EXHAUSTED',
+                message: 'Unable to reserve a unique slip number after 3 attempts. Please retry.',
+              });
+            }
+            continue;
+          }
+
+          try {
+            const resRow = await tx.receiptNumberReservation.create({
+              data: {
+                slipNumber: candidate,
+                status: 'RESERVED',
+                receiptId: receipt.id,
+              },
+            });
+            slipNumber = candidate;
+            reservationId = resRow.id;
+            activeSlipNumber = candidate;
+            activeReservationId = resRow.id;
+            break;
+          } catch (resErr: any) {
+            if (resErr.code === 'P2002' || resErr.message?.includes('unique') || resErr.message?.includes('duplicate key')) {
+              if (attempt === 3) {
+                throw new ServiceUnavailableException({
+                  error: 'SLIP_NUMBER_COLLISION_EXHAUSTED',
+                  message: 'Unable to reserve a unique slip number after 3 attempts. Please retry.',
+                });
+              }
+              continue; // retry only the reservation!
+            }
+            throw resErr;
+          }
+        }
+
+        if (!slipNumber || !reservationId) {
+          throw new ServiceUnavailableException({
+            error: 'SLIP_NUMBER_RESERVATION_FAILED',
+            message: 'Failed to reserve an official slip number.',
+          });
+        }
+
+        const hexA = Math.random().toString(16).substring(2, 6).toUpperCase();
+        const hexB = Math.random().toString(16).substring(2, 6).toUpperCase();
+        const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
+
+        // ── 5. UPDATE RECEIPT, PAYMENT, ALLOCATION, AUDIT IN SAME TX ────────
+        const updatedReceipt = await tx.receiptSubmission.update({
+          where: { id: receiptId },
+          data: {
+            status: 'verified',
+            verifiedByAdminId: session.adminId || session.username,
+            verifiedAt: now,
+            slipNumber,
+            slipNumberFormatVersion: formatVersion,
+            securityHash,
+          },
+          select: lightweightReceiptSelect,
+        });
+
+        let finalAllocations: any = null;
+        if (receipt.paymentKind === 'balloon') {
+          const payments = await tx.paymentRecord.findMany({
+            where: { bookingId: receipt.bookingId, feeType: 'plot_installment', status: { in: ['pending', 'overdue', 'partially_paid'] } },
+          });
+          const pendingInst = payments.map((p) => ({
+            id: p.id,
+            installmentNumber: p.installmentNumber,
+            dueDate: p.dueDate,
+            amount: Number(p.amount),
+            paidAmount: Number(p.paidAmount),
+            status: p.status,
+          }));
+
+          const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
+          if (engineResult.error) {
+            throw new UnprocessableEntityException({ error: 'BALLOON_ERROR', message: engineResult.error });
+          }
+
+          const oldPreview = receipt.previewData || { allocations: [] };
+          const sortAllocations = (a: any[]) =>
+            [...a].map((alloc) => ({
+              paymentRecordId: alloc.paymentRecordId,
+              amountApplied: alloc.amountApplied,
+              allocationType: alloc.allocationType,
+            })).sort((x, y) => x.paymentRecordId.localeCompare(y.paymentRecordId));
+
+          const oldSorted = JSON.stringify(sortAllocations((oldPreview as any).allocations || []));
+          const newSorted = JSON.stringify(sortAllocations(engineResult.allocations));
+
+          if (oldSorted !== newSorted && !dto.confirmPreviewDrift) {
+            throw new ConflictException({
+              error: 'PREVIEW_DRIFT',
+              message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
+              newPreview: engineResult,
+            });
+          }
+          finalAllocations = engineResult.allocations;
+
+          for (const alloc of finalAllocations) {
+            await tx.paymentAllocation.create({
+              data: {
+                receiptId,
+                paymentRecordId: alloc.paymentRecordId,
+                amountApplied: alloc.amountApplied,
+                allocationType: alloc.allocationType,
+              },
+            });
+
+            const currentPr = await tx.paymentRecord.findUnique({ where: { id: alloc.paymentRecordId } });
+            if (currentPr) {
+              const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
+              const newStatus = newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid';
+              await tx.paymentRecord.update({
+                where: { id: currentPr.id },
+                data: {
+                  paidAmount: newPaidAmount,
+                  status: newStatus,
+                  paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                  transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+                },
+              });
+            }
+          }
+        }
+
+        let paymentFeeType: string | null = null;
+        if (receipt.paymentRecordId) {
+          const currentPr = await tx.paymentRecord.findUnique({
+            where: { id: receipt.paymentRecordId },
+          });
+          if (currentPr) {
+            paymentFeeType = currentPr.feeType;
+            if (currentPr.status !== 'paid') {
+              await tx.paymentRecord.update({
+                where: { id: receipt.paymentRecordId },
+                data: {
+                  status: 'paid',
+                  paidAmount: receipt.amount,
+                  paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                  transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+                },
+              });
+            }
+          }
+        }
+
+        const plotPromoted = await maybeAllotIfFullyPaid(
+          tx,
+          receipt.bookingId,
+          session.adminId || session.username || 'system',
+        );
+
+        let promotedPlotId: string | null = null;
+        let promotedPlotNumber: string | null = null;
+        let promotedBlockId: string | null = null;
+
+        const booking = await tx.booking.findUnique({
+          where: { id: receipt.bookingId },
+          include: { plot: { include: { block: true } } },
+        });
+        const plotId = booking?.plotId || booking?.plot?.id || null;
+        const plotNumber = booking?.plot?.plotNumber || null;
+        const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || null;
+        const plotSize = booking?.plot?.size || null;
+        const plotCategory = booking?.plot?.category || null;
+
+        if (plotPromoted && booking?.plot) {
+          promotedPlotId = booking.plot.id;
+          promotedPlotNumber = booking.plot.plotNumber;
+          promotedBlockId = booking.plot.blockId;
+
+          await tx.auditEntry.create({
+            data: {
+              actorId: session.adminId || session.username,
+              actorName: session.fullName || session.username,
+              actorRole: session.role,
+              action: 'PLOT_STATUS_CHANGED',
+              entityType: 'plot',
+              entityId: booking.plot.id,
+              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
+              oldValue: { status: 'booked' },
+              newValue: { status: 'allotted' },
+            },
+          });
+        }
 
         await tx.auditEntry.create({
           data: {
             actorId: session.adminId || session.username,
             actorName: session.fullName || session.username,
             actorRole: session.role,
-            action: 'PLOT_STATUS_CHANGED',
-            entityType: 'plot',
-            entityId: booking.plot.id,
-            details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
-            oldValue: { status: 'booked' },
-            newValue: { status: 'allotted' },
+            action: 'RECEIPT_VERIFIED',
+            entityType: 'receipt',
+            entityId: receiptId,
+            details: `Verified payment receipt ${receiptId} (${slipNumber}) for Member ${receipt.customer?.fullName || receipt.customerId} - PKR ${Number(receipt.amount).toLocaleString()}`,
+            newValue: {
+              slipNumber,
+              securityHash,
+              verifiedBy: session.fullName || session.username,
+            },
           },
         });
-      }
-      // ─────────────────────────────────────────────────────────────────────────
 
-      // 3. Create Audit Log
-      await tx.auditEntry.create({
-        data: {
-          actorId: session.adminId || session.username,
-          actorName: session.fullName || session.username,
-          actorRole: session.role,
-          action: 'RECEIPT_VERIFIED',
-          entityType: 'receipt',
-          entityId: receiptId,
-          details: `Verified payment receipt ${receiptId} (${slipNumber}) for Member ${receipt.customer?.fullName || receipt.customerId} - PKR ${Number(receipt.amount).toLocaleString()}`,
-          newValue: {
-            slipNumber,
-            securityHash,
-            verifiedBy: session.fullName || session.username,
+        // CONSUME RESERVATION
+        await tx.receiptNumberReservation.update({
+          where: { id: reservationId },
+          data: { status: 'CONSUMED' },
+        });
+
+        const responsePayload = {
+          ok: true,
+          plotPromoted: plotPromoted || false,
+          promotedPlotId: promotedPlotId || null,
+          promotedPlotNumber: promotedPlotNumber || null,
+          receipt: {
+            ...updatedReceipt,
+            customerName: receipt.customer?.fullName,
+            membershipNo: receipt.customer?.membershipNo,
+            customerCnic: receipt.customer?.cnic,
+            fatherOrHusbandName: receipt.customer?.fatherOrHusbandName,
+            customer: receipt.customer,
+            plotNumber,
+            blockName,
+            plotSize,
+            plotCategory,
+            feeType: paymentFeeType,
+            slip: {
+              slipNumber,
+              securityHash,
+              generatedAt: now.toISOString(),
+              qrPayload: `/verify/${slipNumber}`,
+              societyAuthorityStamp: `OFFICIAL SOCIETY VERIFICATION • REG NO 411 KPK • VERIFIED BY ${(session.fullName || session.username).toUpperCase()}`,
+            },
           },
-        },
+        };
+
+        // MARK IDEMPOTENCY RECORD SUCCEEDED WITH STORED RESULT
+        await tx.receiptApprovalIdempotency.update({
+          where: { key: cleanIdempotencyKey },
+          data: {
+            status: 'SUCCEEDED',
+            response: responsePayload,
+          },
+        });
+
+        broadcastPayload = {
+          receiptId: updatedReceipt.id,
+          customerId: receipt.customerId,
+          bookingId: receipt.bookingId,
+          slipNumber,
+          plotId,
+          plotPromoted,
+          promotedPlotId,
+          promotedBlockId,
+        };
+
+        return { isReplay: false, response: responsePayload };
       });
 
-      return {
-        receipt: updatedReceipt,
-        plotPromoted,
-        promotedPlotId,
-        promotedPlotNumber,
-        promotedBlockId,
-        plotId,
-        plotNumber,
-        blockName,
-        plotSize,
-        plotCategory,
-        feeType: paymentFeeType,
-      };
-    });
+      if (result.isReplay) {
+        return result.storedResponse;
+      }
+      finalReturnResult = result.response;
+    } catch (err: any) {
+      // ON FAIL: receipt stays pending, payment unpaid, mark reservation ABANDONED
+      if (activeSlipNumber) {
+        try {
+          await this.prisma.withScopedSession(session, async (failTx) => {
+            await failTx.receiptNumberReservation.upsert({
+              where: { slipNumber: activeSlipNumber! },
+              update: { status: 'ABANDONED' },
+              create: {
+                slipNumber: activeSlipNumber!,
+                receiptId,
+                status: 'ABANDONED',
+              },
+            });
+          });
+        } catch {
+          // ignore secondary update failure
+        }
+      }
 
+      try {
+        await this.prisma.withScopedSession(session, async (failTx) => {
+          await failTx.receiptApprovalIdempotency.upsert({
+            where: { key: cleanIdempotencyKey },
+            update: { status: 'FAILED' },
+            create: {
+              key: cleanIdempotencyKey,
+              receiptId,
+              status: 'FAILED',
+              requestHash,
+            },
+          });
+        });
+      } catch {
+        // ignore secondary update failure
+      }
 
-    await this.realtime.broadcast('receipts', 'RECEIPT_VERIFIED', {
-      receiptId: result.receipt.id,
-      customerId: receipt.customerId,
-      slipNumber,
-    });
-
-    await this.realtime.broadcast('plots', 'PAYMENT_RECORD_UPDATED', {
-      customerId: receipt.customerId,
-      bookingId: receipt.bookingId,
-      plotId: result.plotId,
-    });
-
-    // If the last installment flipped the plot to 'allotted', broadcast map update
-    if (result.plotPromoted && result.promotedPlotId) {
-      await this.realtime.broadcast(`block:${result.promotedBlockId}`, 'PLOT_STATUS_CHANGED', {
-        plotId: result.promotedPlotId,
-        status: 'allotted',
-      });
-      await this.realtime.broadcast('plots', 'PLOT_STATUS_CHANGED', {
-        plotId: result.promotedPlotId,
-        status: 'allotted',
-      });
+      throw err;
     }
 
-    return {
-      ok: true,
-      plotPromoted: result.plotPromoted || false,
-      promotedPlotId: result.promotedPlotId || null,
-      promotedPlotNumber: result.promotedPlotNumber || null,
-      receipt: {
-        ...result.receipt,
-        customerName: receipt.customer?.fullName,
-        membershipNo: receipt.customer?.membershipNo,
-        customerCnic: receipt.customer?.cnic,
-        fatherOrHusbandName: receipt.customer?.fatherOrHusbandName,
-        customer: receipt.customer,
-        plotNumber: result.plotNumber,
-        blockName: result.blockName,
-        plotSize: result.plotSize,
-        plotCategory: result.plotCategory,
-        feeType: result.feeType,
-        slip: {
-          slipNumber,
-          securityHash,
-          generatedAt: now.toISOString(),
-          societyAuthorityStamp: `OFFICIAL SOCIETY VERIFICATION • REG NO 411 KPK • VERIFIED BY ${(session.fullName || session.username).toUpperCase()}`,
-        },
-      },
-    };
+    // ── 6. BROADCAST ONLY AFTER COMMIT ────────────────────────────────────
+    if (broadcastPayload) {
+      await this.realtime.broadcast('receipts', 'RECEIPT_VERIFIED', {
+        receiptId: broadcastPayload.receiptId,
+        customerId: broadcastPayload.customerId,
+        slipNumber: broadcastPayload.slipNumber,
+      });
+
+      await this.realtime.broadcast('plots', 'PAYMENT_RECORD_UPDATED', {
+        customerId: broadcastPayload.customerId,
+        bookingId: broadcastPayload.bookingId,
+        plotId: broadcastPayload.plotId,
+      });
+
+      if (broadcastPayload.plotPromoted && broadcastPayload.promotedPlotId) {
+        await this.realtime.broadcast(`block:${broadcastPayload.promotedBlockId}`, 'PLOT_STATUS_CHANGED', {
+          plotId: broadcastPayload.promotedPlotId,
+          status: 'allotted',
+        });
+        await this.realtime.broadcast('plots', 'PLOT_STATUS_CHANGED', {
+          plotId: broadcastPayload.promotedPlotId,
+          status: 'allotted',
+        });
+      }
+    }
+
+    return finalReturnResult;
   }
 
   /**
