@@ -1706,6 +1706,12 @@ export class ReceiptsService {
           }
         }
 
+        const rawCnic = receipt.customer?.cnic || '';
+        const cnicDigits = rawCnic.replace(/\D/g, '');
+        const maskedCnic = cnicDigits.length >= 4
+          ? `***********${cnicDigits.slice(-4)}`
+          : (rawCnic ? '***********' : null);
+
         const memberDisplayName = receipt.customer?.fullName || 'Valued Member';
         const paymentDetails = isOneTime
           ? 'Payment: full upfront / one-time'
@@ -1713,28 +1719,20 @@ export class ReceiptsService {
 
         return {
           exists: true,
+          status: receipt.status,
           slipNumber: receipt.slipNumber,
           memberDisplayName,
-          customerName: receipt.customer?.fullName || null,
-          fatherOrHusbandName: receipt.customer?.fatherOrHusbandName || null,
-          customerCnic: receipt.customer?.cnic || null,
-          cnic: receipt.customer?.cnic || null,
+          cnic: maskedCnic,
           membershipNo: receipt.customer?.membershipNo || null,
           plotNumber: booking?.plot?.plotNumber || null,
           blockName: booking?.plot?.block?.name || null,
           plotSize: booking?.plot?.size || null,
           plotCategory: booking?.plot?.category || null,
-          feeType,
           paymentType: booking?.paymentType || null,
-          installmentNumber: isOneTime ? null : installmentNumber,
-          paymentDetails,
+          installmentLabel: paymentDetails,
           amount: receipt.amount,
           paymentDate: receipt.paymentDate ? (receipt.paymentDate instanceof Date ? receipt.paymentDate.toISOString().split('T')[0] : String(receipt.paymentDate).split('T')[0]) : null,
-          status: receipt.status,
           securityHash: receipt.securityHash || null,
-          depositoryBank: receipt.depositoryBank || null,
-          bankName: receipt.depositoryBank || null,
-          transactionRef: receipt.transactionRef || null,
           verifiedAt: receipt.verifiedAt ? (receipt.verifiedAt instanceof Date ? receipt.verifiedAt.toISOString().split('T')[0] : String(receipt.verifiedAt).split('T')[0]) : null,
         };
       }

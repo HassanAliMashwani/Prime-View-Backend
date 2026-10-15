@@ -135,7 +135,12 @@ async function run() {
   assert.strictEqual(oldData.slipNumber, 'PV-SLIP-2026-9264', 'Old slip number must match');
   assert.strictEqual(oldData.verificationToken, undefined, 'Old slip public response must not return verificationToken');
   assert.strictEqual(oldData.qrTarget, undefined, 'Old slip public response must not return qrTarget');
-  console.log(`✓ PV-SLIP-2026-9264 still opens and verifies successfully without token or qrTarget`);
+  assert.strictEqual(oldData.cnic, '***********7891', 'Old slip public CNIC must be masked as 11 asterisks + last 4 digits');
+  assert.strictEqual(oldData.fatherOrHusbandName, undefined, 'Old slip public response must not return father name');
+  assert.strictEqual(oldData.depositoryBank, undefined, 'Old slip public response must not return bank');
+  assert.strictEqual(oldData.bankName, undefined, 'Old slip public response must not return bank name');
+  assert.strictEqual(oldData.transactionRef, undefined, 'Old slip public response must not return transaction reference');
+  console.log(`✓ PV-SLIP-2026-9264 still opens and verifies successfully with masked CNIC and no private details`);
 
   // Verify new receipt also verifies via public verify by token
   const resVerifyToken = await fetch(`${BASE_URL}/receipts/verify/${token}`);
@@ -145,7 +150,12 @@ async function run() {
   assert.strictEqual(verifyTokenData.slipNumber, slip?.slipNumber, 'Slip number must match');
   assert.strictEqual(verifyTokenData.verificationToken, undefined, 'New slip public response must not return verificationToken');
   assert.strictEqual(verifyTokenData.qrTarget, undefined, 'New slip public response must not return qrTarget');
-  console.log(`✓ New receipt successfully verified by token via public API: /verify/${token} (no token/qrTarget leak)`);
+  assert.strictEqual(verifyTokenData.cnic, '***********7891', 'New slip public CNIC must be masked as 11 asterisks + last 4 digits');
+  assert.strictEqual(verifyTokenData.fatherOrHusbandName, undefined, 'New slip public response must not return father name');
+  assert.strictEqual(verifyTokenData.depositoryBank, undefined, 'New slip public response must not return bank');
+  assert.strictEqual(verifyTokenData.bankName, undefined, 'New slip public response must not return bank name');
+  assert.strictEqual(verifyTokenData.transactionRef, undefined, 'New slip public response must not return transaction reference');
+  console.log(`✓ New receipt successfully verified by token via public API: /verify/${token} (no leak, masked CNIC)`);
 
   // Verify new receipt also verifies via public verify by slipNumber
   const resVerifySlip = await fetch(`${BASE_URL}/receipts/verify/${slip.slipNumber}`);
@@ -154,7 +164,25 @@ async function run() {
   assert.strictEqual(verifySlipData.exists, true, 'New slip must exist when queried by slipNumber');
   assert.strictEqual(verifySlipData.verificationToken, undefined, 'New slip public response must not return verificationToken');
   assert.strictEqual(verifySlipData.qrTarget, undefined, 'New slip public response must not return qrTarget');
-  console.log(`✓ New receipt successfully verified by slipNumber via public API: /verify/${slip.slipNumber} (no token/qrTarget leak)`);
+  assert.strictEqual(verifySlipData.cnic, '***********7891', 'New slip public CNIC must be masked as 11 asterisks + last 4 digits');
+  assert.strictEqual(verifySlipData.fatherOrHusbandName, undefined, 'New slip public response must not return father name');
+  assert.strictEqual(verifySlipData.depositoryBank, undefined, 'New slip public response must not return bank');
+  assert.strictEqual(verifySlipData.bankName, undefined, 'New slip public response must not return bank name');
+  assert.strictEqual(verifySlipData.transactionRef, undefined, 'New slip public response must not return transaction reference');
+  console.log(`✓ New receipt successfully verified by slipNumber via public API: /verify/${slip.slipNumber} (no leak, masked CNIC)`);
+
+  // Verify admin fetch keeps full details
+  const resAdmin = await fetch(`${BASE_URL}/receipts?search=${slip.slipNumber}`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  const adminData = await resAdmin.json();
+  const adminSlip = adminData.receipts?.find((x) => x.slipNumber === slip.slipNumber);
+  assert(adminSlip, 'Admin must find receipt');
+  assert.strictEqual(adminSlip.customerCnic, '13503-1234789-1', 'Admin fetch must keep full CNIC');
+  assert.strictEqual(adminSlip.fatherOrHusbandName, 'zia', 'Admin fetch must keep father name');
+  assert(adminSlip.depositoryBank, 'Admin fetch must keep bank');
+  assert(adminSlip.transactionRef, 'Admin fetch must keep transaction reference');
+  console.log(`✓ Admin fetch keeps full CNIC, father name, bank, and transaction reference`);
 
   console.log('\n====================================================');
   console.log('   ALL PHASE 2 STEP A CHECKS PASSED!');
