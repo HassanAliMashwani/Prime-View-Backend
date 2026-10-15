@@ -17,6 +17,7 @@ import { Prisma, ReceiptStatus } from '@prisma/client';
 import { StorageService } from '../storage/storage.service';
 import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
 import { maybeAllotIfFullyPaid } from '../plots/update-plot-status';
+import { generateSlipNumber } from './receipt-number.generator';
 
 const lightweightReceiptSelect = {
   id: true,
@@ -850,8 +851,23 @@ export class ReceiptsService {
 
     const now = new Date();
     const year = now.getFullYear();
-    const randomSerial = Math.floor(1000 + Math.random() * 9000);
-    const slipNumber = `PV-SLIP-${year}-${randomSerial}`;
+
+    // Feature Flag: RECEIPT_NUMBER_FORMAT_VERSION (Default = 1)
+    // Version 1: Legacy 4-digit serial (e.g. PV-SLIP-2026-9264)
+    // Version 2: Cryptographically random 10-char Base32 serial (e.g. PV-SLIP-2026-K7M4Q9X2R8)
+    const formatVersion = Number(process.env.RECEIPT_NUMBER_FORMAT_VERSION || '1');
+    let slipNumber: string;
+    let slipNumberFormatVersion: number;
+
+    if (formatVersion === 2) {
+      slipNumber = generateSlipNumber(year);
+      slipNumberFormatVersion = 2;
+    } else {
+      const randomSerial = Math.floor(1000 + Math.random() * 9000);
+      slipNumber = `PV-SLIP-${year}-${randomSerial}`;
+      slipNumberFormatVersion = 1;
+    }
+
     const hexA = Math.random().toString(16).substring(2, 6).toUpperCase();
     const hexB = Math.random().toString(16).substring(2, 6).toUpperCase();
     const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
@@ -865,6 +881,7 @@ export class ReceiptsService {
           verifiedByAdminId: session.adminId || session.username,
           verifiedAt: now,
           slipNumber,
+          slipNumberFormatVersion,
           securityHash,
         },
         select: lightweightReceiptSelect,
