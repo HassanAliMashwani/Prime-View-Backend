@@ -1713,82 +1713,56 @@ export class ReceiptsService {
     const verifiedData = await this.prisma.withScopedSession(
       { role: 'super_admin' },
       async (tx) => {
+        const publicVerifyReceiptSelect = {
+          id: true,
+          customerId: true,
+          bookingId: true,
+          paymentRecordId: true,
+          slipNumber: true,
+          slipNumberFormatVersion: true,
+          verificationToken: true,
+          qrTarget: true,
+          securityHash: true,
+          integrityHash: true,
+          hashKeyVersion: true,
+          memberNameSnapshot: true,
+          membershipNumberSnapshot: true,
+          cnicLast4Snapshot: true,
+          plotNumberSnapshot: true,
+          blockNameSnapshot: true,
+          amountSnapshot: true,
+          paymentDateSnapshot: true,
+          paymentRecordIdSnapshot: true,
+          issuedByNameSnapshot: true,
+          issuedAtSnapshot: true,
+          verifiedByAdminId: true,
+          amount: true,
+          paymentDate: true,
+          status: true,
+          depositoryBank: true,
+          transactionRef: true,
+          verifiedAt: true,
+          customer: {
+            select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
+          },
+        };
+
         let receipt = await tx.receiptSubmission.findUnique({
           where: { slipNumber: cleanSlipNumber },
-          select: {
-            id: true,
-            slipNumber: true,
-            slipNumberFormatVersion: true,
-            verificationToken: true,
-            qrTarget: true,
-            securityHash: true,
-            integrityHash: true,
-            hashKeyVersion: true,
-            amount: true,
-            paymentDate: true,
-            status: true,
-            depositoryBank: true,
-            transactionRef: true,
-            verifiedAt: true,
-            bookingId: true,
-            paymentRecordId: true,
-            customer: {
-              select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
-            },
-          },
+          select: publicVerifyReceiptSelect,
         });
 
         if (!receipt && cleanSlipNumber.toUpperCase() !== cleanSlipNumber) {
           receipt = await tx.receiptSubmission.findUnique({
             where: { slipNumber: cleanSlipNumber.toUpperCase() },
-            select: {
-              id: true,
-              slipNumber: true,
-              slipNumberFormatVersion: true,
-              verificationToken: true,
-              qrTarget: true,
-              securityHash: true,
-              integrityHash: true,
-              hashKeyVersion: true,
-              amount: true,
-              paymentDate: true,
-              status: true,
-              depositoryBank: true,
-              transactionRef: true,
-              verifiedAt: true,
-              bookingId: true,
-              paymentRecordId: true,
-              customer: {
-                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
-              },
-            },
+            select: publicVerifyReceiptSelect,
           });
         }
 
         if (!receipt) {
           receipt = await tx.receiptSubmission.findFirst({
             where: { slipNumber: { equals: cleanSlipNumber, mode: 'insensitive' } },
-            select: {
-              id: true,
-              slipNumber: true,
-              slipNumberFormatVersion: true,
-              verificationToken: true,
-              qrTarget: true,
-              securityHash: true,
-              integrityHash: true,
-              hashKeyVersion: true,
-              amount: true,
-              paymentDate: true,
-              status: true,
-              depositoryBank: true,
-              transactionRef: true,
-              verifiedAt: true,
-              bookingId: true,
-              paymentRecordId: true,
-              customer: {
-                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
-              },
-            },
+            select: publicVerifyReceiptSelect,
           });
         }
 
@@ -1796,27 +1770,7 @@ export class ReceiptsService {
         if (!receipt) {
           receipt = await tx.receiptSubmission.findUnique({
             where: { verificationToken: cleanSlipNumber },
-            select: {
-              id: true,
-              slipNumber: true,
-              slipNumberFormatVersion: true,
-              verificationToken: true,
-              qrTarget: true,
-              securityHash: true,
-              integrityHash: true,
-              hashKeyVersion: true,
-              amount: true,
-              paymentDate: true,
-              status: true,
-              depositoryBank: true,
-              transactionRef: true,
-              verifiedAt: true,
-              bookingId: true,
-              paymentRecordId: true,
-              customer: {
-                select: { fullName: true, membershipNo: true, cnic: true, fatherOrHusbandName: true }
-              },
-            },
+            select: publicVerifyReceiptSelect,
           });
         }
 
@@ -1830,8 +1784,10 @@ export class ReceiptsService {
               where: { id: receipt.bookingId },
               select: {
                 paymentType: true,
+                plotId: true,
                 plot: {
                   select: {
+                    id: true,
                     plotNumber: true,
                     size: true,
                     category: true,
@@ -1841,6 +1797,7 @@ export class ReceiptsService {
               },
             })
           : null;
+        const plotId = booking?.plotId || booking?.plot?.id || null;
 
         let installmentNumber: number | null = null;
         let isOneTime = booking?.paymentType === 'one_time';
@@ -1871,6 +1828,44 @@ export class ReceiptsService {
           ? 'Payment: full upfront / one-time'
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
 
+        // Check cryptographic HMAC integrity if hashKeyVersion is set
+        let publicStatus: string = receipt.status;
+
+        if (receipt.hashKeyVersion !== null && receipt.hashKeyVersion !== undefined) {
+          const canonicalString = buildReceiptCanonicalString({
+            receiptId: receipt.id,
+            slipNumber: receipt.slipNumber,
+            memberId: receipt.customerId,
+            memberName: receipt.memberNameSnapshot,
+            membershipNumber: receipt.membershipNumberSnapshot,
+            amount: receipt.amountSnapshot,
+            paymentDate: receipt.paymentDateSnapshot,
+            plotId,
+            plotNumber: receipt.plotNumberSnapshot,
+            paymentRecordId: receipt.paymentRecordIdSnapshot,
+            issuedByAdminId: receipt.verifiedByAdminId,
+            issuedByName: receipt.issuedByNameSnapshot,
+            issuedAt: receipt.issuedAtSnapshot,
+          });
+
+          let secretForVersion: string | undefined = undefined;
+          if (receipt.hashKeyVersion === 1) {
+            secretForVersion = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
+          }
+
+          let isMatch = false;
+          if (secretForVersion && receipt.integrityHash) {
+            const computedHash = computeReceiptHmac(canonicalString, secretForVersion);
+            isMatch = timingSafeCompare(receipt.integrityHash, computedHash);
+          }
+
+          if (isMatch) {
+            publicStatus = receipt.status;
+          } else {
+            publicStatus = 'integrity_mismatch';
+          }
+        }
+
         const isSigned = Boolean(receipt.integrityHash);
         const securityHashDisplay = isSigned && receipt.integrityHash
           ? receipt.integrityHash.substring(0, 16)
@@ -1878,7 +1873,7 @@ export class ReceiptsService {
 
         return {
           exists: true,
-          status: receipt.status,
+          status: publicStatus,
           slipNumber: receipt.slipNumber,
           memberDisplayName,
           cnic: maskedCnic,
