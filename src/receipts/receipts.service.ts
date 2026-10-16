@@ -2036,6 +2036,15 @@ export class ReceiptsService {
     }
     const cleanIdempotencyKey = idempotencyKey.trim();
 
+    const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
+    const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
+    if (!verifyOrigin) {
+      throw new ServiceUnavailableException({
+        error: 'PUBLIC_VERIFY_ORIGIN_MISSING',
+        message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured.',
+      });
+    }
+
     const requestPayload = {
       action: 'replace',
       reasonCode: dto.reasonCode,
@@ -2326,19 +2335,6 @@ export class ReceiptsService {
       const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
 
       const verificationToken = crypto.randomBytes(32).toString('base64url');
-      const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
-      const isProduction = process.env.NODE_ENV === 'production';
-      let verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
-      if (!verifyOrigin) {
-        if (!isProduction) {
-          verifyOrigin = 'http://localhost:3000';
-        } else {
-          throw new ServiceUnavailableException({
-            error: 'PUBLIC_VERIFY_ORIGIN_MISSING',
-            message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured in production.',
-          });
-        }
-      }
       const qrTarget = `${verifyOrigin}/verify/${verificationToken}`;
 
       const booking = await tx.booking.findUnique({
@@ -2822,13 +2818,9 @@ export class ReceiptsService {
           });
 
           const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
-          const isProduction = process.env.NODE_ENV === 'production';
-          let verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
-          if (!verifyOrigin) {
-            verifyOrigin = isProduction ? 'https://primeview.pk' : 'http://localhost:3000';
-          }
+          const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
           const replacedBySlipNumber = replacement?.slipNumber || null;
-          const currentVerificationUrl = replacedBySlipNumber
+          const currentVerificationUrl = (replacedBySlipNumber && verifyOrigin)
             ? `${verifyOrigin}/verify/${replacedBySlipNumber}`
             : null;
 
