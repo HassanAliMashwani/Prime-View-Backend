@@ -1947,6 +1947,7 @@ export class ReceiptsService {
           entityType: 'receipt',
           entityId: receiptId,
           details: `Cancelled receipt ${receipt.slipNumber || receiptId} (${dto.reasonCode}): ${dto.reason.trim()}`,
+          oldValue: { status: receipt.status },
           newValue: {
             status: 'cancelled',
             slipNumber: receipt.slipNumber,

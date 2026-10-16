@@ -5,9 +5,10 @@ const { initEnv } = require('./env-helper');
 
 initEnv();
 
-const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || '65d1d082-dee0-40a5-8ea1-8d3d47736285';
-const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is required.');
+}
 const BASE_URL = `http://localhost:${PORT}`;
 
 async function scopedDb(fn) {
