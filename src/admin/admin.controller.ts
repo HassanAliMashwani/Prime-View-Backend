@@ -83,7 +83,7 @@ export class AdminController {
   @HttpCode(HttpStatus.OK)
   async resetAdminPassword(
     @Param('id') id: string,
-    @Body() dto: ResetAdminPasswordDto,
+    @Body() dto: ResetAdminPasswordDto = {},
     @CurrentSession() session: any,
   ) {
     return this.adminService.resetAdminPassword(id, dto, session);

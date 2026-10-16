@@ -16,6 +16,7 @@ import { ChangeAdminPasswordDto } from './dto/change-admin-password.dto';
 import { UpdateAdminProfileDto } from './dto/update-admin-profile.dto';
 import { MODULE_REGISTRY } from '../common/constants/module-registry';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AdminService {
@@ -474,11 +475,19 @@ export class AdminService {
     };
   }
 
+  private generatePortalPassword(): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    const bytes = crypto.randomBytes(14);
+    let out = '';
+    for (let i = 0; i < 14; i++) out += alphabet[bytes[i] % alphabet.length];
+    return out;
+  }
+
   /**
    * 4. POST /admin/sub-admins/:id/reset-password
    * Super Admin resets password of another administrator.
    */
-  async resetAdminPassword(adminId: string, dto: ResetAdminPasswordDto, session: any) {
+  async resetAdminPassword(adminId: string, dto: ResetAdminPasswordDto = {}, session: any) {
     if (session.role !== 'super_admin') {
       throw new ForbiddenException({
         error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
@@ -513,12 +522,20 @@ export class AdminService {
       });
     }
 
-    const passwordHash = await bcrypt.hash(dto.newPassword.trim(), 10);
+    const plain = (dto?.newPassword && dto.newPassword.trim().length >= 8)
+      ? dto.newPassword.trim()
+      : this.generatePortalPassword();
+
+    const passwordHash = await bcrypt.hash(plain, 10);
 
     await this.prisma.withScopedSession(session, async (tx) => {
       await tx.adminUser.update({
         where: { id: adminId },
-        data: { passwordHash },
+        data: {
+          passwordHash,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+        },
       });
 
       await tx.auditEntry.create({
@@ -534,7 +551,13 @@ export class AdminService {
       });
     });
 
-    return { ok: true, message: `Password reset successfully for ${targetUser.username}.` };
+    return {
+      ok: true,
+      username: targetUser.username,
+      newPassword: plain,
+      adminId,
+      message: `Password reset successfully for ${targetUser.username}.`,
+    };
   }
 
   /**
