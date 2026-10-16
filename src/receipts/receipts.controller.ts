@@ -22,6 +22,7 @@ import { SubmitReceiptDto } from './dto/submit-receipt.dto';
 import { VerifyReceiptDto } from './dto/verify-receipt.dto';
 import { RejectReceiptDto } from './dto/reject-receipt.dto';
 import { CancelReceiptDto } from './dto/cancel-receipt.dto';
+import { ReplaceReceiptDto } from './dto/replace-receipt.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { Throttle } from '@nestjs/throttler';
 
@@ -111,6 +112,23 @@ export class ReceiptsController {
       });
     }
     return this.receiptsService.cancelReceipt(id, dto, session, idempotencyKey.trim());
+  }
+
+  @Post(':id/replace')
+  @HttpCode(HttpStatus.OK)
+  async replaceReceipt(
+    @Param('id') id: string,
+    @Body() dto: ReplaceReceiptDto,
+    @CurrentSession() session: any,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    if (!idempotencyKey || typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+      throw new BadRequestException({
+        error: 'MISSING_IDEMPOTENCY_KEY',
+        message: 'Idempotency-Key header is required for receipt replacement.',
+      });
+    }
+    return this.receiptsService.replaceReceipt(id, dto, session, idempotencyKey.trim());
   }
 
   @Post(':id/reject')
