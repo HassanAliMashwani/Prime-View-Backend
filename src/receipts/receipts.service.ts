@@ -913,6 +913,14 @@ export class ReceiptsService {
     }
     const cleanIdempotencyKey = idempotencyKey.trim();
 
+    const hmacSecret = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
+    if (!hmacSecret) {
+      throw new ServiceUnavailableException({
+        error: 'RECEIPT_SIGNING_SECRET_MISSING',
+        message: 'RECEIPT_HMAC_SECRET_V1 is not configured.',
+      });
+    }
+
     // Deterministic payload hash for body mismatch detection (409)
     const requestPayload = {
       notes: dto.notes ?? null,
@@ -1271,15 +1279,9 @@ export class ReceiptsService {
           issuedAt: dbIssuedAt,
         });
 
-        // Compute HMAC if secret present in env
-        const hmacSecret = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
-        let integrityHash: string | null = null;
-        let hashKeyVersion: number | null = null;
-
-        if (hmacSecret) {
-          integrityHash = computeReceiptHmac(canonicalString, hmacSecret);
-          hashKeyVersion = 1;
-        }
+        // Compute HMAC
+        const integrityHash = computeReceiptHmac(canonicalString, hmacSecret);
+        const hashKeyVersion = 1;
 
         // Save integrityHash & hashKeyVersion
         const updatedReceipt = await tx.receiptSubmission.update({
@@ -2036,6 +2038,14 @@ export class ReceiptsService {
     }
     const cleanIdempotencyKey = idempotencyKey.trim();
 
+    const hmacSecret = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
+    if (!hmacSecret) {
+      throw new ServiceUnavailableException({
+        error: 'RECEIPT_SIGNING_SECRET_MISSING',
+        message: 'RECEIPT_HMAC_SECRET_V1 is not configured.',
+      });
+    }
+
     const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
     const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
     if (!verifyOrigin) {
@@ -2410,14 +2420,8 @@ export class ReceiptsService {
         issuedAt: dbIssuedAt,
       });
 
-      const hmacSecret = process.env.RECEIPT_HMAC_SECRET_V1?.trim();
-      let integrityHash: string | null = null;
-      let hashKeyVersion: number | null = null;
-
-      if (hmacSecret) {
-        integrityHash = computeReceiptHmac(canonicalString, hmacSecret);
-        hashKeyVersion = 1;
-      }
+      const integrityHash = computeReceiptHmac(canonicalString, hmacSecret);
+      const hashKeyVersion = 1;
 
       const updatedNewReceipt = await tx.receiptSubmission.update({
         where: { id: newReceiptId },
