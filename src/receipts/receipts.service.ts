@@ -921,6 +921,20 @@ export class ReceiptsService {
       });
     }
 
+    const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
+    if (
+      !rawOrigin ||
+      rawOrigin.includes('localhost') ||
+      rawOrigin.includes('127.0.0.1') ||
+      rawOrigin.includes('192.168')
+    ) {
+      throw new ServiceUnavailableException({
+        error: 'PUBLIC_VERIFY_ORIGIN_INVALID',
+        message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured or contains an invalid address.',
+      });
+    }
+    const verifyOrigin = rawOrigin;
+
     // Deterministic payload hash for body mismatch detection (409)
     const requestPayload = {
       notes: dto.notes ?? null,
@@ -1198,19 +1212,6 @@ export class ReceiptsService {
         const securityHash = `PV-SEC-${hexA}-${hexB}-${Date.now().toString().slice(-4)}`;
 
         const verificationToken = crypto.randomBytes(32).toString('base64url');
-        const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
-        const isProduction = process.env.NODE_ENV === 'production';
-        let verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
-        if (!verifyOrigin) {
-          if (!isProduction) {
-            verifyOrigin = 'http://localhost:3000';
-          } else {
-            throw new ServiceUnavailableException({
-              error: 'PUBLIC_VERIFY_ORIGIN_MISSING',
-              message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured in production.',
-            });
-          }
-        }
         const qrTarget = `${verifyOrigin}/verify/${verificationToken}`;
 
         const booking = await tx.booking.findUnique({
@@ -2047,13 +2048,18 @@ export class ReceiptsService {
     }
 
     const rawOrigin = process.env.PUBLIC_RECEIPT_VERIFY_ORIGIN?.trim()?.replace(/\/$/, '');
-    const verifyOrigin = (rawOrigin && !rawOrigin.includes('192.168.1.4')) ? rawOrigin : '';
-    if (!verifyOrigin) {
+    if (
+      !rawOrigin ||
+      rawOrigin.includes('localhost') ||
+      rawOrigin.includes('127.0.0.1') ||
+      rawOrigin.includes('192.168')
+    ) {
       throw new ServiceUnavailableException({
-        error: 'PUBLIC_VERIFY_ORIGIN_MISSING',
-        message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured.',
+        error: 'PUBLIC_VERIFY_ORIGIN_INVALID',
+        message: 'PUBLIC_RECEIPT_VERIFY_ORIGIN is not configured or contains an invalid address.',
       });
     }
+    const verifyOrigin = rawOrigin;
 
     const requestPayload = {
       action: 'replace',
