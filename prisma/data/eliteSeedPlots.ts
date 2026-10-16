@@ -1295,7 +1295,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-01",
     "blockId": "elite",
-    "plotNumber": "01",
+    "plotNumber": "1",
     "size": "3 Kanal",
     "category": "amenity",
     "plotType": "amenity_office",
@@ -1306,7 +1306,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-02",
     "blockId": "elite",
-    "plotNumber": "02",
+    "plotNumber": "2",
     "size": "2.4 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1316,7 +1316,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-03",
     "blockId": "elite",
-    "plotNumber": "03",
+    "plotNumber": "3",
     "size": "2.15 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1326,7 +1326,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-04",
     "blockId": "elite",
-    "plotNumber": "04",
+    "plotNumber": "4",
     "size": "2.28 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1336,7 +1336,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-05",
     "blockId": "elite",
-    "plotNumber": "05",
+    "plotNumber": "5",
     "size": "2.27 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1346,7 +1346,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-06",
     "blockId": "elite",
-    "plotNumber": "06",
+    "plotNumber": "6",
     "size": "2 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1356,7 +1356,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-07",
     "blockId": "elite",
-    "plotNumber": "07",
+    "plotNumber": "7",
     "size": "2 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1366,7 +1366,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-08",
     "blockId": "elite",
-    "plotNumber": "08",
+    "plotNumber": "8",
     "size": "2 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
@@ -1376,7 +1376,7 @@ export const eliteSeedPlots: Plot[] = [
   {
     "id": "plot-el-09",
     "blockId": "elite",
-    "plotNumber": "09",
+    "plotNumber": "9",
     "size": "2 Kanal",
     "category": "residential",
     "plotType": "2_kanal",
