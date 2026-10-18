@@ -736,12 +736,26 @@ export class CustomersService {
     const initialPassword = dto.portalPassword.trim();
     const passwordHash = await bcrypt.hash(initialPassword, 10);
 
+    let effectivePrice = Number(plot.price);
+    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
+      const parsedPrice = Number(dto.plotPrice);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Total Payment (Plot Price) must be a valid positive amount greater than zero.',
+        });
+      }
+      if (session.role === 'super_admin') {
+        effectivePrice = parsedPrice;
+      }
+    }
+
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
     const bookingDate = booking.bookingDate || now;
     const {
       installmentPlanData,
       schedule,
-    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, bookingDate);
+    } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, bookingDate);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Update Customer
@@ -769,6 +783,30 @@ export class CustomersService {
         data: customerUpdateData,
       });
 
+      // Price change check & validation
+      const isPriceChanged = session.role === 'super_admin' && effectivePrice !== Number(plot.price);
+      if (isPriceChanged) {
+        const existingPlotBills = await tx.paymentRecord.findMany({
+          where: {
+            bookingId: booking.id,
+            feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time, FeeType.plot_biannual, FeeType.plot_possession] },
+          },
+        });
+        const hasPaidBill = existingPlotBills.some((b) => Number(b.paidAmount) > 0 || b.status === PaymentStatus.paid);
+        if (hasPaidBill) {
+          throw new BadRequestException({
+            error: 'PRICE_CHANGE_FORBIDDEN',
+            message: 'Cannot change plot price because payments have already been recorded against this booking.',
+          });
+        }
+
+        await tx.plot.update({
+          where: { id: plot.id },
+          data: { price: effectivePrice },
+        });
+        plot.price = effectivePrice as any;
+      }
+
       // Check if booking already has any monthly, bi-annual, or possession rows:
       const existingInstallmentRows = await tx.paymentRecord.findMany({
         where: {
@@ -785,47 +823,13 @@ export class CustomersService {
           status: 'completed',
           confirmationDate: now,
           paymentType: pType,
-          installmentPlan: existingInstallmentRows.length > 0 ? (booking.installmentPlan || installmentPlanData) : installmentPlanData,
+          installmentPlan: (existingInstallmentRows.length > 0 && !isPriceChanged) ? (booking.installmentPlan || installmentPlanData) : installmentPlanData,
           paperInstallmentRef: dto.paperInstallmentRef?.trim() || null,
         },
       });
 
-      // 3. Create Fixed Statutory Fees (PKR 2,000 Admission Fee, PKR 10,000 Share Subscription Fee) if not already existing
-      let admFee = await tx.paymentRecord.findFirst({
-        where: { bookingId: booking.id, feeType: FeeType.admission_fee },
-      });
-      if (!admFee) {
-        admFee = await tx.paymentRecord.create({
-          data: {
-            id: `fee-adm-${booking.id}`,
-            bookingId: booking.id,
-            feeType: FeeType.admission_fee,
-            dueDate: now,
-            amount: 2000,
-            paidAmount: 2000,
-            status: PaymentStatus.paid,
-          },
-        });
-      }
-
-      let subFee = await tx.paymentRecord.findFirst({
-        where: { bookingId: booking.id, feeType: FeeType.share_subscription_fee },
-      });
-      if (!subFee) {
-        subFee = await tx.paymentRecord.create({
-          data: {
-            id: `fee-sub-${booking.id}`,
-            bookingId: booking.id,
-            feeType: FeeType.share_subscription_fee,
-            dueDate: now,
-            amount: 10000,
-            paidAmount: 10000,
-            status: PaymentStatus.paid,
-          },
-        });
-      }
-
-      const paymentRecords = [admFee, subFee];
+      // Statutory fees (admission_fee, share_subscription_fee) are completely removed
+      const paymentRecords: any[] = [];
 
       // 4. Plot Price Payment Records & Status
       if (pType === PaymentType.one_time) {
@@ -844,8 +848,8 @@ export class CustomersService {
             bookingId: booking.id,
             feeType: FeeType.plot_one_time,
             dueDate: now,
-            amount: Number(plot.price),
-            paidAmount: Number(plot.price),
+            amount: effectivePrice,
+            paidAmount: effectivePrice,
             status: PaymentStatus.paid,
           },
         });
@@ -868,9 +872,28 @@ export class CustomersService {
         }
       } else {
         // Installment:
-        // If this booking already has monthly, bi-annual, or possession rows, leave those rows alone.
-        // Build the new schedule only when the booking has none.
-        if (existingInstallmentRows.length === 0) {
+        if (isPriceChanged) {
+          // If price changed by Super Admin, replace all unpaid plot bills with new schedule
+          await tx.paymentRecord.deleteMany({
+            where: {
+              bookingId: booking.id,
+              feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time, FeeType.plot_biannual, FeeType.plot_possession] },
+            },
+          });
+
+          const billsToCreate = schedule.map((item, i) => ({
+            id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}-${Date.now()}-${i}`,
+            bookingId: booking.id,
+            feeType: item.feeType,
+            installmentNumber: item.installmentNumber,
+            dueDate: item.dueDate,
+            amount: item.amount,
+            paidAmount: item.paidAmount,
+            status: item.status,
+          }));
+          await tx.paymentRecord.createMany({ data: billsToCreate });
+          paymentRecords.push(...billsToCreate);
+        } else if (existingInstallmentRows.length === 0) {
           await tx.paymentRecord.deleteMany({
             where: {
               bookingId: booking.id,
@@ -884,25 +907,27 @@ export class CustomersService {
             where: { bookingId: booking.id, feeType: FeeType.plot_downpayment, status: PaymentStatus.paid },
           });
 
+          const billsToCreate: any[] = [];
           for (let i = 0; i < schedule.length; i++) {
             const item = schedule[i];
             if (item.feeType === FeeType.plot_downpayment && existingDown) {
               paymentRecords.push(existingDown);
               continue;
             }
-            const rec = await tx.paymentRecord.create({
-              data: {
-                id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}-${Date.now()}`,
-                bookingId: booking.id,
-                feeType: item.feeType,
-                installmentNumber: item.installmentNumber,
-                dueDate: item.dueDate,
-                amount: item.amount,
-                paidAmount: item.paidAmount,
-                status: item.status,
-              },
+            billsToCreate.push({
+              id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}-${Date.now()}-${i}`,
+              bookingId: booking.id,
+              feeType: item.feeType,
+              installmentNumber: item.installmentNumber,
+              dueDate: item.dueDate,
+              amount: item.amount,
+              paidAmount: item.paidAmount,
+              status: item.status,
             });
-            paymentRecords.push(rec);
+          }
+          if (billsToCreate.length > 0) {
+            await tx.paymentRecord.createMany({ data: billsToCreate });
+            paymentRecords.push(...billsToCreate);
           }
         } else {
           paymentRecords.push(...existingInstallmentRows);
@@ -1085,6 +1110,7 @@ export class CustomersService {
         paymentType: dto.paymentType,
         paperInstallmentRef: dto.paperInstallmentRef,
         installmentPlan: dto.installmentPlan,
+        plotPrice: dto.plotPrice,
       }, session);
     }
 
@@ -1100,6 +1126,20 @@ export class CustomersService {
         error: 'MEMBERSHIP_EXISTS',
         message: `Membership Number "${targetMembershipNo}" is already assigned to ${dupMem.fullName}.`,
       });
+    }
+
+    let effectivePrice = Number(plot.price);
+    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
+      const parsedPrice = Number(dto.plotPrice);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Total Payment (Plot Price) must be a valid positive amount greater than zero.',
+        });
+      }
+      if (session.role === 'super_admin') {
+        effectivePrice = parsedPrice;
+      }
     }
 
     const now = new Date();
@@ -1118,7 +1158,7 @@ export class CustomersService {
     const {
       installmentPlanData,
       schedule,
-    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, now);
+    } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, now);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Create Customer
@@ -1158,6 +1198,15 @@ export class CustomersService {
         },
       });
 
+      // If price was changed by Super Admin, update the plot price
+      if (session.role === 'super_admin' && effectivePrice !== Number(plot.price)) {
+        await tx.plot.update({
+          where: { id: plot.id },
+          data: { price: effectivePrice },
+        });
+        plot.price = effectivePrice as any;
+      }
+
       // 3. Update Plot
       const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
 
@@ -1176,6 +1225,7 @@ export class CustomersService {
 
       const updatedPlot = {
         ...plot,
+        price: effectivePrice,
         status: targetPlotStatus,
         currentOwnerId: customer.id,
         lockedBy: null,
@@ -1188,32 +1238,8 @@ export class CustomersService {
         data: { status: 'superseded', supersededAt: now, supersededByBookingId: bookingId },
       });
 
-      // 5. Statutory Fees
-      const admFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-adm-${bookingId}`,
-          bookingId,
-          feeType: FeeType.admission_fee,
-          dueDate: now,
-          amount: 2000,
-          paidAmount: 2000,
-          status: PaymentStatus.paid,
-        },
-      });
-
-      const subFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-sub-${bookingId}`,
-          bookingId,
-          feeType: FeeType.share_subscription_fee,
-          dueDate: now,
-          amount: 10000,
-          paidAmount: 10000,
-          status: PaymentStatus.paid,
-        },
-      });
-
-      const paymentRecords = [admFee, subFee];
+      // Statutory fees are completely removed
+      const paymentRecords: any[] = [];
 
       // 6. Plot Price Payments
       if (pType === PaymentType.one_time) {
@@ -1223,29 +1249,25 @@ export class CustomersService {
             bookingId,
             feeType: FeeType.plot_one_time,
             dueDate: now,
-            amount: Number(plot.price),
-            paidAmount: Number(plot.price),
+            amount: effectivePrice,
+            paidAmount: effectivePrice,
             status: PaymentStatus.paid,
           },
         });
         paymentRecords.push(fullPay);
       } else {
-        for (let i = 0; i < schedule.length; i++) {
-          const item = schedule[i];
-          const rec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
-              bookingId,
-              feeType: item.feeType,
-              installmentNumber: item.installmentNumber,
-              dueDate: item.dueDate,
-              amount: item.amount,
-              paidAmount: item.paidAmount,
-              status: item.status,
-            },
-          });
-          paymentRecords.push(rec);
-        }
+        const billsToCreate = schedule.map((item, i) => ({
+          id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
+          bookingId,
+          feeType: item.feeType,
+          installmentNumber: item.installmentNumber,
+          dueDate: item.dueDate,
+          amount: item.amount,
+          paidAmount: item.paidAmount,
+          status: item.status,
+        }));
+        await tx.paymentRecord.createMany({ data: billsToCreate });
+        paymentRecords.push(...billsToCreate);
       }
 
       await maybeAllotIfFullyPaid(tx, bookingId, session.adminId || session.username || 'system');
@@ -1399,6 +1421,20 @@ export class CustomersService {
 
     const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
 
+    let effectivePrice = Number(plot.price);
+    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
+      const parsedPrice = Number(dto.plotPrice);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Total Payment (Plot Price) must be a valid positive amount greater than zero.',
+        });
+      }
+      if (session.role === 'super_admin') {
+        effectivePrice = parsedPrice;
+      }
+    }
+
     const now = new Date();
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
@@ -1406,7 +1442,7 @@ export class CustomersService {
     const {
       installmentPlanData,
       schedule,
-    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, now);
+    } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, now);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Create Booking
@@ -1426,6 +1462,15 @@ export class CustomersService {
         },
       });
 
+      // If price was changed by Super Admin, update the plot price
+      if (session.role === 'super_admin' && effectivePrice !== Number(plot.price)) {
+        await tx.plot.update({
+          where: { id: plot.id },
+          data: { price: effectivePrice },
+        });
+        plot.price = effectivePrice as any;
+      }
+
       // 2. Update Plot
       const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
 
@@ -1444,6 +1489,7 @@ export class CustomersService {
 
       const updatedPlot = {
         ...plot,
+        price: effectivePrice,
         status: targetPlotStatus,
         currentOwnerId: customer.id,
         lockedBy: null,
@@ -1464,32 +1510,8 @@ export class CustomersService {
         },
       });
 
-      // 4. Statutory Fees
-      const admFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-adm-${bookingId}`,
-          bookingId,
-          feeType: FeeType.admission_fee,
-          dueDate: now,
-          amount: 2000,
-          paidAmount: 2000,
-          status: PaymentStatus.paid,
-        },
-      });
-
-      const subFee = await tx.paymentRecord.create({
-        data: {
-          id: `fee-sub-${bookingId}`,
-          bookingId,
-          feeType: FeeType.share_subscription_fee,
-          dueDate: now,
-          amount: 10000,
-          paidAmount: 10000,
-          status: PaymentStatus.paid,
-        },
-      });
-
-      const paymentRecords = [admFee, subFee];
+      // Statutory fees are completely removed
+      const paymentRecords: any[] = [];
 
       // 5. Plot Price Payments
       if (pType === PaymentType.one_time) {
@@ -1499,29 +1521,25 @@ export class CustomersService {
             bookingId,
             feeType: FeeType.plot_one_time,
             dueDate: now,
-            amount: Number(plot.price),
-            paidAmount: Number(plot.price),
+            amount: effectivePrice,
+            paidAmount: effectivePrice,
             status: PaymentStatus.paid,
           },
         });
         paymentRecords.push(fullPay);
       } else {
-        for (let i = 0; i < schedule.length; i++) {
-          const item = schedule[i];
-          const rec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
-              bookingId,
-              feeType: item.feeType,
-              installmentNumber: item.installmentNumber,
-              dueDate: item.dueDate,
-              amount: item.amount,
-              paidAmount: item.paidAmount,
-              status: item.status,
-            },
-          });
-          paymentRecords.push(rec);
-        }
+        const billsToCreate = schedule.map((item, i) => ({
+          id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
+          bookingId,
+          feeType: item.feeType,
+          installmentNumber: item.installmentNumber,
+          dueDate: item.dueDate,
+          amount: item.amount,
+          paidAmount: item.paidAmount,
+          status: item.status,
+        }));
+        await tx.paymentRecord.createMany({ data: billsToCreate });
+        paymentRecords.push(...billsToCreate);
       }
 
       await maybeAllotIfFullyPaid(tx, bookingId, session.adminId || session.username || 'system');

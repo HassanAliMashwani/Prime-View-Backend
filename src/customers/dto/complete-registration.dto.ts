@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, ValidateNested, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, ValidateNested, Matches, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 import { InstallmentPlanDto } from '../../plots/dto/book-plot.dto';
 
@@ -75,4 +75,9 @@ export class CompleteRegistrationDto {
   @IsString()
   @IsOptional()
   cnic?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  plotPrice?: number;
 }

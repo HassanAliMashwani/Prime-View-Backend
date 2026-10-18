@@ -320,20 +320,28 @@ export class ReceiptsService {
       });
     }
 
-    // Identify target payment record
+    // Identify target payment record, next unpaid bill & plot balance
     let targetPaymentRecord: any = null;
+    let unpaidOnNextBill = 0;
+    let totalStillOwedOnPlot = 0;
+
+    const dueStatuses = ['pending', 'overdue', 'partially_paid'];
+    const installmentFeeTypes = ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'];
+
     if (dto.paymentType === 'installment') {
-      const dueStatuses = ['pending', 'overdue', 'partially_paid'];
-      const installmentFeeTypes = ['plot_installment', 'plot_biannual', 'plot_possession'];
-      targetPaymentRecord = booking.payments
+      const unpaidBills = booking.payments
         .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
         .sort((a, b) => {
+          if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
+          if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
           if (a.dueDate && b.dueDate) {
             const cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
             if (cmp !== 0) return cmp;
           }
           return (a.installmentNumber || 0) - (b.installmentNumber || 0);
-        })[0];
+        });
+
+      targetPaymentRecord = unpaidBills[0];
 
       if (!targetPaymentRecord) {
         throw new BadRequestException({
@@ -341,10 +349,20 @@ export class ReceiptsService {
           message: 'No outstanding installments found for this plot.',
         });
       }
+
+      unpaidOnNextBill = Math.max(0, Number(targetPaymentRecord.amount) - Number(targetPaymentRecord.paidAmount));
+      totalStillOwedOnPlot = unpaidBills.reduce((acc, p) => acc + Math.max(0, Number(p.amount) - Number(p.paidAmount)), 0);
+
     } else if (dto.paymentType === 'one_time') {
       targetPaymentRecord = booking.payments.find(
         (p) => p.feeType === 'plot_one_time',
       );
+
+      const plotPrice = Number(booking.plot?.price || targetPaymentRecord?.amount || 0);
+      const paidOnPlot = Number(targetPaymentRecord?.paidAmount || 0);
+      const unpaidOnPlot = Math.max(0, plotPrice - paidOnPlot);
+
+      totalStillOwedOnPlot = unpaidOnPlot > 0 ? unpaidOnPlot : plotPrice;
 
       if (targetPaymentRecord) {
         // Allow exactly ONE record receipt for an already-settled one-time payment
@@ -366,38 +384,74 @@ export class ReceiptsService {
       }
     }
 
-    // Check for balloon logic
+    // Strict validation for payment kind and deposited amounts
     let previewData: any = null;
     let paymentKind = dto.paymentKind || 'regular';
 
-    if (paymentKind === 'balloon') {
-      if (dto.paymentType !== 'installment') {
+    if (dto.paymentType === 'one_time' || booking.paymentType === 'one_time') {
+      if (paymentKind === 'balloon') {
         throw new BadRequestException({
-          error: 'BALLOON_NOT_SUPPORTED',
-          message: 'Balloon payments are only supported for installments.',
+          error: 'BALLOON_NOT_ALLOWED',
+          message: 'Balloon payments are not permitted on full-payment plots.',
         });
       }
-
-      // Calculate preview
-      const pendingInst = booking.payments
-        .filter((p) => ['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType) && ['pending', 'overdue', 'partially_paid'].includes(p.status))
-        .map((p) => ({
-          id: p.id,
-          installmentNumber: p.installmentNumber,
-          dueDate: p.dueDate,
-          amount: Number(p.amount),
-          paidAmount: Number(p.paidAmount),
-          status: p.status,
-        }));
-
-      const res = allocateBalloon(Number(dto.amount), pendingInst);
-      if (res.error) {
+      if (Math.abs(Number(dto.amount) - totalStillOwedOnPlot) > 0.01) {
         throw new BadRequestException({
-          error: 'BALLOON_ENGINE_ERROR',
-          message: res.error,
+          error: 'INVALID_AMOUNT',
+          message: `Deposited amount must be the full amount still unpaid on this plot (PKR ${Math.round(totalStillOwedOnPlot).toLocaleString()}).`,
         });
       }
-      previewData = res;
+    } else if (dto.paymentType === 'installment') {
+      if (paymentKind === 'regular') {
+        if (Math.abs(Number(dto.amount) - unpaidOnNextBill) > 0.01) {
+          throw new BadRequestException({
+            error: 'INVALID_REGULAR_AMOUNT',
+            message: `Regular payment must be exactly what is still unpaid on the next bill (PKR ${Math.round(unpaidOnNextBill).toLocaleString()}).`,
+          });
+        }
+      } else if (paymentKind === 'balloon') {
+        if (Number(dto.amount) < unpaidOnNextBill) {
+          throw new BadRequestException({
+            error: 'BALLOON_TOO_LOW',
+            message: `A balloon payment cannot be smaller than the next bill (PKR ${Math.round(unpaidOnNextBill).toLocaleString()}).`,
+          });
+        }
+        if (Number(dto.amount) > totalStillOwedOnPlot) {
+          throw new BadRequestException({
+            error: 'BALLOON_EXCEEDS_BALANCE',
+            message: `A balloon payment cannot exceed the total balance owed on the plot (PKR ${Math.round(totalStillOwedOnPlot).toLocaleString()}).`,
+          });
+        }
+
+        // Calculate balloon preview
+        const pendingInst = booking.payments
+          .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
+          .sort((a, b) => {
+            if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
+            if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
+            const timeA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+            const timeB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+            if (timeA !== timeB) return timeA - timeB;
+            return (a.installmentNumber || 0) - (b.installmentNumber || 0);
+          })
+          .map((p) => ({
+            id: p.id,
+            installmentNumber: p.installmentNumber,
+            dueDate: p.dueDate ? new Date(p.dueDate) : null,
+            amount: Number(p.amount),
+            paidAmount: Number(p.paidAmount),
+            status: p.status,
+          }));
+
+        const res = allocateBalloon(Number(dto.amount), pendingInst);
+        if (res.error) {
+          throw new BadRequestException({
+            error: 'BALLOON_ENGINE_ERROR',
+            message: res.error,
+          });
+        }
+        previewData = res;
+      }
     }
 
     // Check for existing pending receipt submission
@@ -778,14 +832,30 @@ export class ReceiptsService {
     });
 
     if (!booking) throw new NotFoundException({ error: 'BOOKING_NOT_FOUND', message: 'Booking not found or not owned by you.' });
-    if (booking.paymentType !== 'installment') throw new BadRequestException({ error: 'BALLOON_NOT_SUPPORTED', message: 'Balloon payments are only for installments.' });
+    if (booking.paymentType !== 'installment') {
+      throw new BadRequestException({
+        error: 'BALLOON_NOT_ALLOWED',
+        message: 'Balloon payments are not permitted on full-payment plots.',
+      });
+    }
+
+    const dueStatuses = ['pending', 'overdue', 'partially_paid'];
+    const installmentFeeTypes = ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'];
 
     const pendingInst = booking.payments
-      .filter((p) => ['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType) && ['pending', 'overdue', 'partially_paid'].includes(p.status))
+      .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
+      .sort((a, b) => {
+        if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
+        if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
+        const timeA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+        const timeB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.installmentNumber || 0) - (b.installmentNumber || 0);
+      })
       .map((p) => ({
         id: p.id,
         installmentNumber: p.installmentNumber,
-        dueDate: p.dueDate,
+        dueDate: p.dueDate ? new Date(p.dueDate) : null,
         amount: Number(p.amount),
         paidAmount: Number(p.paidAmount),
         status: p.status,
@@ -1299,18 +1369,27 @@ export class ReceiptsService {
           const payments = await tx.paymentRecord.findMany({
             where: {
               bookingId: receipt.bookingId,
-              feeType: { in: ['plot_installment', 'plot_biannual', 'plot_possession'] },
+              feeType: { in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'] },
               status: { in: ['pending', 'overdue', 'partially_paid'] },
             },
           });
-          const pendingInst = payments.map((p) => ({
-            id: p.id,
-            installmentNumber: p.installmentNumber,
-            dueDate: p.dueDate,
-            amount: Number(p.amount),
-            paidAmount: Number(p.paidAmount),
-            status: p.status,
-          }));
+          const pendingInst = payments
+            .sort((a, b) => {
+              if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
+              if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
+              const timeA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
+              const timeB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
+              if (timeA !== timeB) return timeA - timeB;
+              return (a.installmentNumber || 0) - (b.installmentNumber || 0);
+            })
+            .map((p) => ({
+              id: p.id,
+              installmentNumber: p.installmentNumber,
+              dueDate: p.dueDate ? new Date(p.dueDate) : null,
+              amount: Number(p.amount),
+              paidAmount: Number(p.paidAmount),
+              status: p.status,
+            }));
 
           const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
           if (engineResult.error) {

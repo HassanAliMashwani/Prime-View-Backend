@@ -738,26 +738,7 @@ export class PlotsService {
       });
 
       // 6. Generate Payment Records in batch via single createMany roundtrip
-      const paymentsToCreate: any[] = [
-        {
-          id: `fee-adm-${bookingId}`,
-          bookingId: booking.id,
-          feeType: FeeType.admission_fee,
-          dueDate: now,
-          amount: 2000,
-          paidAmount: 2000,
-          status: PaymentStatus.paid,
-        },
-        {
-          id: `fee-sub-${bookingId}`,
-          bookingId: booking.id,
-          feeType: FeeType.share_subscription_fee,
-          dueDate: now,
-          amount: 10000,
-          paidAmount: 10000,
-          status: PaymentStatus.paid,
-        },
-      ];
+      const paymentsToCreate: any[] = [];
 
       if (pType === PaymentType.one_time) {
         paymentsToCreate.push({

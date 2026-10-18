@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, ValidateNested } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, ValidateNested, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 import { InstallmentPlanDto } from '../../plots/dto/book-plot.dto';
 
@@ -27,4 +27,9 @@ export class AddBookingDto {
   @IsString()
   @IsOptional()
   reservationId?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  plotPrice?: number;
 }
