@@ -2457,86 +2457,110 @@ export class CustomersService {
       });
     }
 
-    const customer = await this.prisma.customer.findUnique({
-      where: { id: customerId },
-    });
-
-    if (!customer) {
-      throw new NotFoundException({
-        error: 'CUSTOMER_NOT_FOUND',
-        message: 'Customer record not found.',
+    return this.prisma.withScopedSession(session, async (tx) => {
+      const customer = await tx.customer.findUnique({
+        where: { id: customerId },
+        include: {
+          bookings: {
+            include: {
+              plot: { include: { block: true } },
+              payments: true,
+            },
+          },
+        },
       });
-    }
 
-    if (customer.registrationStatus === 'minimal') {
-      throw new BadRequestException({
-        error: 'MEMBER_REGISTRATION_MINIMAL',
-        message: 'Customer registration is minimal. Complete Member Registration must be used for initial formal onboarding.',
-      });
-    }
-
-    const plot = await this.prisma.plot.findUnique({
-      where: { id: plotId },
-      include: { block: true },
-    });
-
-    if (!plot) {
-      throw new NotFoundException({
-        error: 'PLOT_NOT_FOUND',
-        message: 'Plot not found.',
-      });
-    }
-
-    // Find the held booking for this customer and plot
-    const booking = await this.prisma.booking.findFirst({
-      where: {
-        plotId: plot.id,
-        customerId: customer.id,
-      },
-      include: {
-        payments: true,
-      },
-    });
-
-    if (!booking) {
-      throw new NotFoundException({
-        error: 'BOOKING_NOT_FOUND',
-        message: 'No held booking found for this member and plot.',
-      });
-    }
-
-    const existingPlotBills = booking.payments.filter((p) =>
-      ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
-    );
-
-    if (existingPlotBills.length > 0) {
-      throw new BadRequestException({
-        error: 'BILLS_ALREADY_EXIST',
-        message: 'This plot already has an active payment plan and bills generated.',
-      });
-    }
-
-    let effectivePrice = Number(plot.price);
-    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
-      const parsedPrice = Number(dto.plotPrice);
-      if (isNaN(parsedPrice) || parsedPrice <= 0) {
-        throw new BadRequestException({
-          error: 'INVALID_PLOT_PRICE',
-          message: 'Plot price must be a valid positive amount greater than zero.',
+      if (!customer) {
+        throw new NotFoundException({
+          error: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer record not found.',
         });
       }
-      effectivePrice = parsedPrice;
-    }
 
-    const now = new Date();
-    const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+      if (customer.registrationStatus === 'minimal') {
+        throw new BadRequestException({
+          error: 'MEMBER_REGISTRATION_MINIMAL',
+          message: 'Customer registration is minimal. Complete Member Registration must be used for initial formal onboarding.',
+        });
+      }
 
-    const {
-      installmentPlanData,
-      schedule,
-    } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, now);
+      // Find held booking for this customer matching plotId (UUID), plotNumber, or an unbilled held plot
+      let booking = customer.bookings.find((b: any) =>
+        b.plotId === plotId ||
+        b.plot?.id === plotId ||
+        b.plot?.plotNumber === plotId ||
+        String(b.plot?.plotNumber).toLowerCase() === String(plotId).toLowerCase()
+      );
 
-    const result = await this.prisma.withScopedSession(session, async (tx) => {
+      if (!booking) {
+        // If plotId is a UUID not yet matched in booking list, query plot directly with tx
+        let standalonePlot = await tx.plot.findUnique({
+          where: { id: plotId },
+          include: { block: true },
+        });
+
+        if (!standalonePlot) {
+          standalonePlot = await tx.plot.findFirst({
+            where: { plotNumber: plotId },
+            include: { block: true },
+          });
+        }
+
+        if (standalonePlot) {
+          booking = customer.bookings.find((b: any) => b.plotId === standalonePlot.id);
+        }
+      }
+
+      // If still not found, locate the unbilled held booking for this customer
+      if (!booking) {
+        booking = customer.bookings.find((b: any) => {
+          const plotBills = (b.payments || []).filter((p: any) =>
+            ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+          );
+          return plotBills.length === 0;
+        });
+      }
+
+      if (!booking || !booking.plot) {
+        throw new NotFoundException({
+          error: 'PLOT_NOT_FOUND',
+          message: 'Plot not found.',
+        });
+      }
+
+      const plot = booking.plot;
+
+      const existingPlotBills = (booking.payments || []).filter((p: any) =>
+        ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+      );
+
+      if (existingPlotBills.length > 0) {
+        throw new BadRequestException({
+          error: 'BILLS_ALREADY_EXIST',
+          message: 'This plot already has an active payment plan and bills generated.',
+        });
+      }
+
+      let effectivePrice = Number(plot.price);
+      if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
+        const parsedPrice = Number(dto.plotPrice);
+        if (isNaN(parsedPrice) || parsedPrice <= 0) {
+          throw new BadRequestException({
+            error: 'INVALID_PLOT_PRICE',
+            message: 'Plot price must be a valid positive amount greater than zero.',
+          });
+        }
+        effectivePrice = parsedPrice;
+      }
+
+      const now = new Date();
+      const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+
+      const {
+        installmentPlanData,
+        schedule,
+      } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, now);
+
       // 1. Update plot price if modified
       if (effectivePrice !== Number(plot.price)) {
         await tx.plot.update({
@@ -2651,25 +2675,17 @@ export class CustomersService {
         },
       });
 
+      this.realtime.broadcast('customers', 'PAYMENT_PLAN_ASSIGNED', { customerId, plotId: plot.id }).catch(() => {});
+      this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_UPDATED', { plotId: plot.id }).catch(() => {});
+      this.realtime.broadcast('plots', 'PLOT_UPDATED', { plotId: plot.id }).catch(() => {});
+
       return {
+        ok: true,
         booking: updatedBooking,
         plot: { ...plot, price: effectivePrice, status: targetPlotStatus },
         documents: [agrDoc, schDoc],
         payments: paymentRecords,
       };
     });
-
-    await this.realtime.broadcast('customers', 'PAYMENT_PLAN_ASSIGNED', { customerId, plotId });
-    await this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_UPDATED', { plotId: plot.id });
-    await this.realtime.broadcast('plots', 'PLOT_UPDATED', { plotId: plot.id });
-
-    return {
-      ok: true,
-      booking: result.booking,
-      plot: result.plot,
-      paymentsCount: result.payments.length,
-    };
   }
 }
-
-
