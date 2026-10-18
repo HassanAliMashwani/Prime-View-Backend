@@ -295,8 +295,8 @@ export class InventoryService {
           COUNT(DISTINCT CASE WHEN psh."toStatus" = 'booked' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as booked,
           COUNT(DISTINCT CASE WHEN psh."toStatus" = 'allotted' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as allotted,
           COUNT(DISTINCT CASE WHEN psh."toStatus" = 'reserved' AND psh."changedAt" >= ${fromStart} AND psh."changedAt" <= ${toEnd} THEN psh."plotId" END) as reserved,
-          COUNT(DISTINCT CASE WHEN latest."toStatus" = 'available' THEN p."id" END) as available,
-          COUNT(DISTINCT CASE WHEN latest."toStatus" = 'disputed' THEN p."id" END) as disputed
+          COUNT(DISTINCT CASE WHEN COALESCE(latest."toStatus", p."status") = 'available' THEN p."id" END) as available,
+          COUNT(DISTINCT CASE WHEN COALESCE(latest."toStatus", p."status") = 'disputed' THEN p."id" END) as disputed
         FROM "Plot" p
         LEFT JOIN "PlotStatusHistory" psh ON psh."plotId" = p."id"
         LEFT JOIN (
@@ -386,16 +386,16 @@ export class InventoryService {
           ) act ON TRUE
           LEFT JOIN LATERAL (
             SELECT COUNT(*)::int AS available
-            FROM (
-              SELECT DISTINCT ON (psh."plotId") psh."toStatus"
+            FROM "Plot" p
+            LEFT JOIN (
+              SELECT DISTINCT ON (psh."plotId") psh."plotId", psh."toStatus"
               FROM "PlotStatusHistory" psh
-              JOIN "Plot" p ON p."id" = psh."plotId"
-              WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
-                AND p."category" != 'amenity'
-                AND psh."changedAt" <= m.m_end
+              WHERE psh."changedAt" <= m.m_end
               ORDER BY psh."plotId", psh."changedAt" DESC
-            ) latest
-            WHERE latest."toStatus" = 'available'
+            ) latest ON latest."plotId" = p."id"
+            WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
+              AND p."category" != 'amenity'
+              AND COALESCE(latest."toStatus", p."status") = 'available'
           ) avail ON TRUE
           ORDER BY m.m_start ASC
         `;
