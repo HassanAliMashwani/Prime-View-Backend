@@ -10,7 +10,7 @@ export class TypedErrorFilter implements ExceptionFilter {
     // Log actual exception
     console.error('ACTUAL EXCEPTION:', exception);
 
-    const GENERIC_ERROR_MESSAGE = 'Something went wrong. Please try again.';
+    const actualMsg = (exception as any)?.message;
 
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
@@ -28,14 +28,14 @@ export class TypedErrorFilter implements ExceptionFilter {
       return response.status(status).json({
         statusCode: status,
         message: formattedMessage,
+        error: (typeof exceptionResponse === 'object' && exceptionResponse !== null ? (exceptionResponse as any).error : undefined) || formattedMessage,
       });
     }
 
     return response.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-      message: GENERIC_ERROR_MESSAGE,
+      message: actualMsg || 'Something went wrong. Please try again.',
+      error: actualMsg || 'INTERNAL_SERVER_ERROR',
     });
   }
 }
-
-

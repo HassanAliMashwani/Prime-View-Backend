@@ -410,13 +410,33 @@ export class CustomersService {
       return { members: [] };
     }
 
+    const digitsOnly = s.replace(/\D/g, '');
+    const orConditions: any[] = [
+      { fullName: { contains: s, mode: 'insensitive' } },
+      { membershipNo: { contains: s, mode: 'insensitive' } },
+      { cnic: { contains: s, mode: 'insensitive' } },
+      { phone: { contains: s, mode: 'insensitive' } },
+    ];
+
+    if (digitsOnly.length > 0) {
+      orConditions.push({ cnic: { contains: digitsOnly, mode: 'insensitive' } });
+      orConditions.push({ phone: { contains: digitsOnly, mode: 'insensitive' } });
+
+      let formatted = '';
+      if (digitsOnly.length <= 5) {
+        formatted = digitsOnly;
+      } else if (digitsOnly.length <= 12) {
+        formatted = `${digitsOnly.slice(0, 5)}-${digitsOnly.slice(5)}`;
+      } else {
+        formatted = `${digitsOnly.slice(0, 5)}-${digitsOnly.slice(5, 12)}-${digitsOnly.slice(12, 13)}`;
+      }
+      if (formatted && formatted !== s && formatted !== digitsOnly) {
+        orConditions.push({ cnic: { contains: formatted, mode: 'insensitive' } });
+      }
+    }
+
     const whereClause: any = {
-      OR: [
-        { fullName: { contains: s, mode: 'insensitive' } },
-        { membershipNo: { contains: s, mode: 'insensitive' } },
-        { cnic: { contains: s, mode: 'insensitive' } },
-        { phone: { contains: s, mode: 'insensitive' } },
-      ],
+      OR: orConditions,
     };
 
     const customers = await this.prisma.customer.findMany({
