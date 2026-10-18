@@ -27,4 +27,8 @@ export class CreateMinimalBookingDto {
   @IsString()
   @IsOptional()
   reservationId?: string;
+
+  @IsString()
+  @IsOptional()
+  customerId?: string;
 }

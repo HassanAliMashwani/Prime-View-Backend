@@ -30,6 +30,14 @@ import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
+  @Get('picker-search')
+  async searchForPicker(
+    @CurrentSession() session: any,
+    @Query('q') q: string,
+  ) {
+    return this.customersService.searchForPicker(session, q);
+  }
+
   @Get()
   @RequirePermission('can_view_customers')
   async findAll(

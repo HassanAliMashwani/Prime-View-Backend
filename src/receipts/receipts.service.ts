@@ -324,8 +324,9 @@ export class ReceiptsService {
     let targetPaymentRecord: any = null;
     if (dto.paymentType === 'installment') {
       const dueStatuses = ['pending', 'overdue', 'partially_paid'];
+      const installmentFeeTypes = ['plot_installment', 'plot_biannual', 'plot_possession'];
       targetPaymentRecord = booking.payments
-        .filter((p) => p.feeType === 'plot_installment' && dueStatuses.includes(p.status))
+        .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
         .sort((a, b) => {
           if (a.dueDate && b.dueDate) {
             const cmp = new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
@@ -379,7 +380,7 @@ export class ReceiptsService {
 
       // Calculate preview
       const pendingInst = booking.payments
-        .filter((p) => p.feeType === 'plot_installment' && ['pending', 'overdue', 'partially_paid'].includes(p.status))
+        .filter((p) => ['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType) && ['pending', 'overdue', 'partially_paid'].includes(p.status))
         .map((p) => ({
           id: p.id,
           installmentNumber: p.installmentNumber,
@@ -780,7 +781,7 @@ export class ReceiptsService {
     if (booking.paymentType !== 'installment') throw new BadRequestException({ error: 'BALLOON_NOT_SUPPORTED', message: 'Balloon payments are only for installments.' });
 
     const pendingInst = booking.payments
-      .filter((p) => p.feeType === 'plot_installment' && ['pending', 'overdue', 'partially_paid'].includes(p.status))
+      .filter((p) => ['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType) && ['pending', 'overdue', 'partially_paid'].includes(p.status))
       .map((p) => ({
         id: p.id,
         installmentNumber: p.installmentNumber,
@@ -1090,7 +1091,7 @@ export class ReceiptsService {
           const balloonPayments = await tx.paymentRecord.findMany({
             where: {
               bookingId: preReceipt.bookingId,
-              feeType: 'plot_installment',
+              feeType: { in: ['plot_installment', 'plot_biannual', 'plot_possession'] },
               status: { in: ['pending', 'overdue', 'partially_paid'] },
             },
             select: { id: true },
@@ -1296,7 +1297,11 @@ export class ReceiptsService {
         let finalAllocations: any = null;
         if (receipt.paymentKind === 'balloon') {
           const payments = await tx.paymentRecord.findMany({
-            where: { bookingId: receipt.bookingId, feeType: 'plot_installment', status: { in: ['pending', 'overdue', 'partially_paid'] } },
+            where: {
+              bookingId: receipt.bookingId,
+              feeType: { in: ['plot_installment', 'plot_biannual', 'plot_possession'] },
+              status: { in: ['pending', 'overdue', 'partially_paid'] },
+            },
           });
           const pendingInst = payments.map((p) => ({
             id: p.id,

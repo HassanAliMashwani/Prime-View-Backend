@@ -52,3 +52,11 @@
 - OI-12 A-01: live booking book-1789346204123-dlee; second void; allotted; owner cust-1.
 - OI-13 Elite 34/94/128/147/254 released to available.
 - Phase 2: inventory JWT + contrast; Elite 120 Mashwani 25M one-time; white allotted labels; no login password123; no withScopedSession({ role: 'super_admin' }).
+- CR-09: Chalet block consolidated into Elite (1 allotted plot preserved, unassigned plots removed); inventory counts match database rows 1:1; sample months removed from chart.
+- CR-09: Receipts desk optimized with text-only payload, on-demand slip loading, and composite index on `(status, uploadedAt)`.
+- CR-09: Police sub-admin booking permission resolved for assigned sectors without full sector elevation.
+- CR-09: Customer directory safe deletion with human-readable blocks on active bookings/allotted plots; registration completion deep-link with pre-filled plot.
+- CR-09: Member portal payment progress calculation fixed (`paidAmount / agreedTotal`).
+- CR-09: Public contact form wired to `Inquiry` table with RLS and rate-limiting.
+- CR-09: Strict 5-7-1 CNIC formatting for Member and Next of Kin across registration, profile, and slip printing.
+- CR-09: Admin profile self-service update endpoint (username, phone, avatar picture) and permission cards clean view.

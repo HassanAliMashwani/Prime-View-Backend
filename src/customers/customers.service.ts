@@ -28,6 +28,7 @@ import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
 import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
 import { updatePlotStatus, maybeAllotIfFullyPaid } from '../plots/update-plot-status';
+import { generateFixedSchedule } from '../common/schedule-calculator';
 import { calculateInstallmentDueDates } from '../common/installment-dates';
 
 @Injectable()
@@ -111,61 +112,45 @@ export class CustomersService {
    */
   private computeInstallmentPlan(
     totalPrice: number,
-    downpaymentInput: number | undefined,
     plan: any,
     pType: PaymentType,
+    bookingDate: Date = new Date(),
   ) {
     if (pType === PaymentType.one_time) {
       return {
         installmentPlanData: null,
-        downpaymentAmount: 0,
-        remainingBalance: 0,
-        numberOfInstallments: 0,
-        paidAfterEvery: 0,
-        baseInstallmentAmount: 0,
-        roundingRemainder: 0,
+        schedule: [],
+        planYears: 0,
       };
     }
 
-    const totalPayment = plan?.totalPayment || totalPrice;
-    const downpaymentAmount =
-      plan?.downpayment !== undefined
-        ? Math.max(0, plan.downpayment)
-        : downpaymentInput !== undefined
-          ? Math.max(0, downpaymentInput)
-          : Math.round(totalPrice / 4);
-    const planYears = plan?.planYears || plan?.years || 2;
-    const paidAfterEvery = plan?.paidAfterEveryMonths || plan?.paidAfterEvery || 3;
-    const numberOfInstallments =
-      plan?.numberOfInstallments || Math.ceil((planYears * 12) / paidAfterEvery);
-
-    if (downpaymentAmount >= totalPayment) {
+    const rawYears = plan?.planYears ?? plan?.years ?? plan?.totalYears ?? 1;
+    const planYears = Number(rawYears);
+    if (![1, 2, 3, 4, 5].includes(planYears)) {
       throw new BadRequestException({
-        error: 'INVALID_DOWNPAYMENT',
-        message: 'Downpayment must be less than Total Payment price.',
+        error: 'INVALID_PLAN_YEARS',
+        message: 'Plan length must be 1, 2, 3, 4, or 5 years.',
       });
     }
 
-    const remainingBalance = totalPayment - downpaymentAmount;
-    const baseInstallmentAmount = Math.floor(remainingBalance / numberOfInstallments);
-    const roundingRemainder = remainingBalance - baseInstallmentAmount * numberOfInstallments;
+    const schedule = generateFixedSchedule({
+      plotPriceRupees: totalPrice,
+      planYears,
+      bookingDate,
+    });
 
     const installmentPlanData = {
-      totalPayment,
-      downpayment: downpaymentAmount,
       planYears,
-      paidAfterEveryMonths: paidAfterEvery,
-      numberOfInstallments,
+      totalPayment: totalPrice,
+      downpayment: schedule[0].amount,
+      monthlyInstallmentCount: planYears * 12,
+      biannualInstallmentCount: planYears * 2,
     };
 
     return {
       installmentPlanData,
-      downpaymentAmount,
-      remainingBalance,
-      numberOfInstallments,
-      paidAfterEvery,
-      baseInstallmentAmount,
-      roundingRemainder,
+      schedule,
+      planYears,
     };
   }
 
@@ -260,7 +245,7 @@ export class CustomersService {
                 select: { id: true, blockId: true, plotNumber: true, size: true, price: true, category: true }
               },
               payments: {
-                where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment'] } },
+                where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'] } },
                 select: { feeType: true, status: true, paidAmount: true }
               }
             }
@@ -300,7 +285,7 @@ export class CustomersService {
             outstandingTotal += Math.max(0, price - paid);
 
             b.payments.forEach(p => {
-              if (p.feeType === 'plot_installment') {
+              if (['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType)) {
                 if (p.status === 'paid') {
                   installmentsPaidCount++;
                 } else {
@@ -405,6 +390,69 @@ export class CustomersService {
    * Minimal Sub Admin Quick Booking Flow (Change Request 07 §5).
    * Creates Customer (minimal, credentialsPending: true) + Booking + flips Plot to booked in 1 atomic transaction.
    */
+    async searchForPicker(session: any, query: string) {
+    const isSuper = session.role === 'super_admin';
+    const canBookOrReserve = Boolean(
+      session.permissions?.can_book ||
+      session.permissions?.can_reserve ||
+      session.permissions?.can_create_customer ||
+      session.permissions?.can_view_customers
+    );
+    if (!isSuper && !canBookOrReserve) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to access customer search.',
+      });
+    }
+
+    const s = (query || '').trim();
+    if (!s) {
+      return { members: [] };
+    }
+
+    const whereClause: any = {
+      OR: [
+        { fullName: { contains: s, mode: 'insensitive' } },
+        { membershipNo: { contains: s, mode: 'insensitive' } },
+        { cnic: { contains: s, mode: 'insensitive' } },
+        { phone: { contains: s, mode: 'insensitive' } },
+      ],
+    };
+
+    const customers = await this.prisma.customer.findMany({
+      where: whereClause,
+      take: 8,
+      select: {
+        id: true,
+        fullName: true,
+        membershipNo: true,
+        cnic: true,
+        phone: true,
+        email: true,
+        city: true,
+        registrationStatus: true,
+        _count: {
+          select: { plots: true },
+        },
+      },
+      orderBy: { fullName: 'asc' },
+    });
+
+    return {
+      members: customers.map((c) => ({
+        id: c.id,
+        fullName: c.fullName,
+        membershipNo: c.membershipNo || '',
+        cnic: c.cnic,
+        phone: c.phone || '',
+        email: c.email || '',
+        city: c.city || '',
+        plotCount: c._count?.plots || 0,
+        registrationStatus: c.registrationStatus,
+      })),
+    };
+  }
+
   async createMinimalBooking(dto: CreateMinimalBookingDto, session: any) {
     const isSuper = session.role === 'super_admin';
     const canBook = Boolean(session.permissions?.can_book || session.permissions?.can_create_customer);
@@ -437,11 +485,24 @@ export class CustomersService {
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
-      // 1. Resolve Customer (Attach to existing member if CNIC exists, else create minimal customer)
+      // 1. Resolve Customer (Attach to existing member if customerId or CNIC exists, else create minimal customer)
       const normalizedCnic = dto.cnic.trim();
-      let customer = await tx.customer.findFirst({
-        where: { cnic: { equals: normalizedCnic, mode: 'insensitive' } },
-      });
+      let customer: any = null;
+      if (dto.customerId) {
+        customer = await this.prisma.customer.findUnique({
+          where: { id: dto.customerId },
+        });
+        if (!customer) {
+          throw new NotFoundException({
+            error: 'CUSTOMER_NOT_FOUND',
+            message: 'Customer not found.',
+          });
+        }
+      } else if (dto.cnic) {
+        customer = await this.prisma.customer.findFirst({
+          where: { cnic: { equals: normalizedCnic, mode: 'insensitive' } },
+        });
+      }
 
       if (customer) {
         customer = await tx.customer.update({
@@ -676,14 +737,11 @@ export class CustomersService {
     const passwordHash = await bcrypt.hash(initialPassword, 10);
 
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+    const bookingDate = booking.bookingDate || now;
     const {
       installmentPlanData,
-      downpaymentAmount,
-      numberOfInstallments,
-      paidAfterEvery,
-      baseInstallmentAmount,
-      roundingRemainder,
-    } = this.computeInstallmentPlan(Number(plot.price), undefined, dto.installmentPlan, pType);
+      schedule,
+    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, bookingDate);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Update Customer
@@ -711,6 +769,14 @@ export class CustomersService {
         data: customerUpdateData,
       });
 
+      // Check if booking already has any monthly, bi-annual, or possession rows:
+      const existingInstallmentRows = await tx.paymentRecord.findMany({
+        where: {
+          bookingId: booking.id,
+          feeType: { in: [FeeType.plot_installment, FeeType.plot_biannual, FeeType.plot_possession] },
+        },
+      });
+
       // 2. Update Booking
       const updatedBooking = await tx.booking.update({
         where: { id: booking.id },
@@ -719,7 +785,7 @@ export class CustomersService {
           status: 'completed',
           confirmationDate: now,
           paymentType: pType,
-          installmentPlan: installmentPlanData,
+          installmentPlan: existingInstallmentRows.length > 0 ? (booking.installmentPlan || installmentPlanData) : installmentPlanData,
           paperInstallmentRef: dto.paperInstallmentRef?.trim() || null,
         },
       });
@@ -761,18 +827,17 @@ export class CustomersService {
 
       const paymentRecords = [admFee, subFee];
 
-      // Remove any existing unpaid plot installment or one-time payment records for this booking to avoid duplicates
-      await tx.paymentRecord.deleteMany({
-        where: {
-          bookingId: booking.id,
-          feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time] },
-          status: { not: PaymentStatus.paid },
-        },
-      });
-
       // 4. Plot Price Payment Records & Status
       if (pType === PaymentType.one_time) {
-        // Full payment: mark this plot's official price paid and set this plot to allotted
+        // Full payment: remove any existing unpaid plot rows to avoid duplicates
+        await tx.paymentRecord.deleteMany({
+          where: {
+            bookingId: booking.id,
+            feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time, FeeType.plot_biannual, FeeType.plot_possession] },
+            status: { not: PaymentStatus.paid },
+          },
+        });
+
         const fullPay = await tx.paymentRecord.create({
           data: {
             id: `pay-one-${booking.id}-${Date.now()}`,
@@ -802,43 +867,45 @@ export class CustomersService {
           });
         }
       } else {
-        // Installment: store typed price on booking's installment schedule only; leave plot booked
-        if (downpaymentAmount > 0) {
-          const downRec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-down-${booking.id}-${Date.now()}`,
+        // Installment:
+        // If this booking already has monthly, bi-annual, or possession rows, leave those rows alone.
+        // Build the new schedule only when the booking has none.
+        if (existingInstallmentRows.length === 0) {
+          await tx.paymentRecord.deleteMany({
+            where: {
               bookingId: booking.id,
-              feeType: FeeType.plot_downpayment,
-              installmentNumber: 0,
-              dueDate: now,
-              amount: downpaymentAmount,
-              paidAmount: downpaymentAmount,
-              status: PaymentStatus.paid,
+              feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time, FeeType.plot_biannual, FeeType.plot_possession] },
+              status: { not: PaymentStatus.paid },
             },
           });
-          paymentRecords.push(downRec);
-        }
 
-        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
-
-        for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = installmentDueDates[i - 1];
-          const currentInstAmount =
-            i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
-
-          const instRec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-inst-${booking.id}-${i}-${Date.now()}`,
-              bookingId: booking.id,
-              feeType: FeeType.plot_installment,
-              installmentNumber: i,
-              dueDate,
-              amount: currentInstAmount,
-              paidAmount: 0,
-              status: PaymentStatus.pending,
-            },
+          // Check if downpayment already exists and is paid
+          const existingDown = await tx.paymentRecord.findFirst({
+            where: { bookingId: booking.id, feeType: FeeType.plot_downpayment, status: PaymentStatus.paid },
           });
-          paymentRecords.push(instRec);
+
+          for (let i = 0; i < schedule.length; i++) {
+            const item = schedule[i];
+            if (item.feeType === FeeType.plot_downpayment && existingDown) {
+              paymentRecords.push(existingDown);
+              continue;
+            }
+            const rec = await tx.paymentRecord.create({
+              data: {
+                id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}-${Date.now()}`,
+                bookingId: booking.id,
+                feeType: item.feeType,
+                installmentNumber: item.installmentNumber,
+                dueDate: item.dueDate,
+                amount: item.amount,
+                paidAmount: item.paidAmount,
+                status: item.status,
+              },
+            });
+            paymentRecords.push(rec);
+          }
+        } else {
+          paymentRecords.push(...existingInstallmentRows);
         }
 
         // Leave plot booked. Only allots later if fully paid via existing rule.
@@ -961,10 +1028,10 @@ export class CustomersService {
    * Create new Customer account and attach first Plot Booking.
    */
   async createCustomerWithBooking(dto: CreateCustomerWithBookingDto, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer) {
+    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer && !session.permissions?.can_book) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'You do not have permission to register new customers.',
+        message: 'You do not have permission to register new customers or book plots.',
       });
     }
 
@@ -982,6 +1049,43 @@ export class CustomersService {
         error: 'INVALID_CNIC',
         message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
       });
+    }
+
+    // Re-use existing customer if customerId provided OR CNIC already belongs to an existing customer
+    let existingCustomer: any = null;
+    if (dto.customerId) {
+      existingCustomer = await this.prisma.customer.findUnique({
+        where: { id: dto.customerId },
+        include: { bookings: true },
+      });
+      if (!existingCustomer) {
+        throw new NotFoundException({
+          error: 'CUSTOMER_NOT_FOUND',
+          message: 'Customer not found.',
+        });
+      }
+    } else if (dto.cnic) {
+      const cleanCnic = dto.cnic.trim();
+      existingCustomer = await this.prisma.customer.findFirst({
+        where: { cnic: cleanCnic },
+        include: { bookings: true },
+      });
+    }
+
+    if (existingCustomer) {
+      if (existingCustomer.registrationStatus === 'minimal') {
+        throw new BadRequestException({
+          error: 'MEMBER_REGISTRATION_MINIMAL',
+          message: 'Selected member has a pending minimal registration. Complete registration on their existing file first before adding another plot.',
+        });
+      }
+
+      return this.addBookingToCustomer(existingCustomer.id, {
+        plotId: dto.plotId,
+        paymentType: dto.paymentType,
+        paperInstallmentRef: dto.paperInstallmentRef,
+        installmentPlan: dto.installmentPlan,
+      }, session);
     }
 
     // Membership uniqueness check
@@ -1013,12 +1117,8 @@ export class CustomersService {
     const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
     const {
       installmentPlanData,
-      downpaymentAmount,
-      numberOfInstallments,
-      paidAfterEvery,
-      baseInstallmentAmount,
-      roundingRemainder,
-    } = this.computeInstallmentPlan(Number(plot.price), undefined, dto.installmentPlan, pType);
+      schedule,
+    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, now);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Create Customer
@@ -1130,42 +1230,21 @@ export class CustomersService {
         });
         paymentRecords.push(fullPay);
       } else {
-        if (downpaymentAmount > 0) {
-          const downRec = await tx.paymentRecord.create({
+        for (let i = 0; i < schedule.length; i++) {
+          const item = schedule[i];
+          const rec = await tx.paymentRecord.create({
             data: {
-              id: `pay-down-${bookingId}`,
+              id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
               bookingId,
-              feeType: FeeType.plot_downpayment,
-              installmentNumber: 0,
-              dueDate: now,
-              amount: downpaymentAmount,
-              paidAmount: downpaymentAmount,
-              status: PaymentStatus.paid,
+              feeType: item.feeType,
+              installmentNumber: item.installmentNumber,
+              dueDate: item.dueDate,
+              amount: item.amount,
+              paidAmount: item.paidAmount,
+              status: item.status,
             },
           });
-          paymentRecords.push(downRec);
-        }
-
-        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
-
-        for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = installmentDueDates[i - 1];
-          const currentInstAmount =
-            i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
-
-          const instRec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-inst-${bookingId}-${i}`,
-              bookingId,
-              feeType: FeeType.plot_installment,
-              installmentNumber: i,
-              dueDate,
-              amount: currentInstAmount,
-              paidAmount: 0,
-              status: PaymentStatus.pending,
-            },
-          });
-          paymentRecords.push(instRec);
+          paymentRecords.push(rec);
         }
       }
 
@@ -1291,19 +1370,24 @@ export class CustomersService {
    * Add additional Plot Booking to an existing customer account.
    */
   async addBookingToCustomer(customerId: string, dto: AddBookingDto, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer) {
+    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer && !session.permissions?.can_book) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to attach plot bookings.',
       });
     }
 
-    const customer = await this.prisma.withScopedSession(session, async (tx) => {
-      return tx.customer.findUnique({ where: { id: customerId } });
-    });
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
 
     if (!customer) {
       throw new NotFoundException({ error: 'CUSTOMER_NOT_FOUND', message: 'Customer record not found.' });
+    }
+
+    if (customer.registrationStatus === 'minimal') {
+      throw new BadRequestException({
+        error: 'MEMBER_REGISTRATION_MINIMAL',
+        message: 'Cannot attach new bookings: Customer has a pending minimal registration. Complete registration first.',
+      });
     }
 
     if (customer.accountStatus === 'suspended') {
@@ -1321,12 +1405,8 @@ export class CustomersService {
 
     const {
       installmentPlanData,
-      downpaymentAmount,
-      numberOfInstallments,
-      paidAfterEvery,
-      baseInstallmentAmount,
-      roundingRemainder,
-    } = this.computeInstallmentPlan(Number(plot.price), undefined, dto.installmentPlan, pType);
+      schedule,
+    } = this.computeInstallmentPlan(Number(plot.price), dto.installmentPlan, pType, now);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       // 1. Create Booking
@@ -1426,42 +1506,21 @@ export class CustomersService {
         });
         paymentRecords.push(fullPay);
       } else {
-        if (downpaymentAmount > 0) {
-          const downRec = await tx.paymentRecord.create({
+        for (let i = 0; i < schedule.length; i++) {
+          const item = schedule[i];
+          const rec = await tx.paymentRecord.create({
             data: {
-              id: `pay-down-${bookingId}`,
+              id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
               bookingId,
-              feeType: FeeType.plot_downpayment,
-              installmentNumber: 0,
-              dueDate: now,
-              amount: downpaymentAmount,
-              paidAmount: downpaymentAmount,
-              status: PaymentStatus.paid,
+              feeType: item.feeType,
+              installmentNumber: item.installmentNumber,
+              dueDate: item.dueDate,
+              amount: item.amount,
+              paidAmount: item.paidAmount,
+              status: item.status,
             },
           });
-          paymentRecords.push(downRec);
-        }
-
-        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
-
-        for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = installmentDueDates[i - 1];
-          const currentInstAmount =
-            i === numberOfInstallments ? baseInstallmentAmount + roundingRemainder : baseInstallmentAmount;
-
-          const instRec = await tx.paymentRecord.create({
-            data: {
-              id: `pay-inst-${bookingId}-${i}`,
-              bookingId,
-              feeType: FeeType.plot_installment,
-              installmentNumber: i,
-              dueDate,
-              amount: currentInstAmount,
-              paidAmount: 0,
-              status: PaymentStatus.pending,
-            },
-          });
-          paymentRecords.push(instRec);
+          paymentRecords.push(rec);
         }
       }
 

@@ -58,6 +58,8 @@ enum FeeType {
   share_subscription_fee
   plot_downpayment
   plot_installment
+  plot_biannual
+  plot_possession
   plot_one_time
 }
 

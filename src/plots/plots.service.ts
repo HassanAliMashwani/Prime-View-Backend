@@ -17,6 +17,7 @@ import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatu
 
 import { attachDisplayStatus } from './display-status';
 import { calculateInstallmentDueDates } from '../common/installment-dates';
+import { generateFixedSchedule } from '../common/schedule-calculator';
 
 @Injectable()
 export class PlotsService {
@@ -548,12 +549,12 @@ export class PlotsService {
       // 2. Resolve Customer inside tx (only reached if plot is valid, in-scope, and bookable)
       let customer: any = null;
       if (dto.customerId) {
-        customer = await tx.customer.findUnique({ where: { id: dto.customerId } });
+        customer = await this.prisma.customer.findUnique({ where: { id: dto.customerId } });
         if (!customer) {
           throw new NotFoundException({ error: 'CUSTOMER_NOT_FOUND', message: 'Specified customer not found' });
         }
         if (dto.customer?.city) {
-          customer = await tx.customer.update({
+          customer = await this.prisma.customer.update({
             where: { id: customer.id },
             data: {
               city: dto.customer.city.trim(),
@@ -689,37 +690,32 @@ export class PlotsService {
       const plotPriceNum = Number(plot.price);
 
       let installmentPlanData: any = null;
-      let downpaymentAmount = 0;
-      let remainingBalance = 0;
-      let numberOfInstallments = 0;
-      let paidAfterEvery = 3;
+      let schedule: any[] = [];
 
       if (pType === PaymentType.installment) {
         const plan = dto.installmentPlan;
-        const totalPayment = plan?.totalPayment || dto.salePrice || plotPriceNum;
-        downpaymentAmount = plan?.downpayment !== undefined
-          ? Math.max(0, plan.downpayment)
-          : (dto.downPayment !== undefined ? Math.max(0, dto.downPayment) : Math.round(plotPriceNum / 4));
-        const planYears = plan?.planYears || plan?.years || 2;
-        paidAfterEvery = plan?.paidAfterEveryMonths || plan?.paidAfterEvery || 3;
-        numberOfInstallments = plan?.numberOfInstallments || Math.ceil((planYears * 12) / paidAfterEvery);
+        const rawYears = plan?.planYears ?? plan?.years ?? (plan as any)?.totalYears ?? (dto as any)?.planYears ?? 1;
+        const planYears = Number(rawYears);
 
-        // Form-level validation guard: 0 <= downpayment < totalPayment
-        if (downpaymentAmount >= totalPayment) {
+        if (![1, 2, 3, 4, 5].includes(planYears)) {
           throw new BadRequestException({
-            error: 'INVALID_DOWNPAYMENT',
-            message: 'Downpayment must be less than Total Payment price.',
+            error: 'INVALID_PLAN_YEARS',
+            message: 'Plan length must be 1, 2, 3, 4, or 5 years.',
           });
         }
 
-        remainingBalance = totalPayment - downpaymentAmount;
+        schedule = generateFixedSchedule({
+          plotPriceRupees: plotPriceNum,
+          planYears,
+          bookingDate: now,
+        });
 
         installmentPlanData = {
-          totalPayment,
-          downpayment: downpaymentAmount,
           planYears,
-          paidAfterEveryMonths: paidAfterEvery,
-          numberOfInstallments,
+          totalPayment: plotPriceNum,
+          downpayment: schedule[0].amount,
+          monthlyInstallmentCount: planYears * 12,
+          biannualInstallmentCount: planYears * 2,
         };
       }
 
@@ -774,39 +770,17 @@ export class PlotsService {
           status: PaymentStatus.pending,
         });
       } else {
-        if (downpaymentAmount > 0) {
+        for (let i = 0; i < schedule.length; i++) {
+          const item = schedule[i];
           paymentsToCreate.push({
-            id: `pay-down-${bookingId}`,
+            id: `pay-${item.feeType}-${bookingId}-${item.installmentNumber ?? i}`,
             bookingId: booking.id,
-            feeType: FeeType.plot_downpayment,
-            installmentNumber: 0,
-            dueDate: now,
-            amount: downpaymentAmount,
-            paidAmount: downpaymentAmount,
-            status: PaymentStatus.paid,
-          });
-        }
-
-        const baseInstallmentAmount = Math.floor(remainingBalance / numberOfInstallments);
-        const roundingRemainder = remainingBalance - (baseInstallmentAmount * numberOfInstallments);
-
-        const installmentDueDates = calculateInstallmentDueDates(now, numberOfInstallments, paidAfterEvery);
-
-        for (let i = 1; i <= numberOfInstallments; i++) {
-          const dueDate = installmentDueDates[i - 1];
-          const currentInstAmount = i === numberOfInstallments
-            ? baseInstallmentAmount + roundingRemainder
-            : baseInstallmentAmount;
-
-          paymentsToCreate.push({
-            id: `pay-inst-${bookingId}-${i}`,
-            bookingId: booking.id,
-            feeType: FeeType.plot_installment,
-            installmentNumber: i,
-            dueDate,
-            amount: currentInstAmount,
-            paidAmount: 0,
-            status: PaymentStatus.pending,
+            feeType: item.feeType,
+            installmentNumber: item.installmentNumber,
+            dueDate: item.dueDate,
+            amount: item.amount,
+            paidAmount: item.paidAmount,
+            status: item.status,
           });
         }
       }

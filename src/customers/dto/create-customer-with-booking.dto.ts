@@ -4,6 +4,10 @@ import { InstallmentPlanDto } from '../../plots/dto/book-plot.dto';
 
 export class CreateCustomerWithBookingDto {
   @IsString()
+  @IsOptional()
+  customerId?: string;
+
+  @IsString()
   @IsNotEmpty()
   plotId: string;
 
