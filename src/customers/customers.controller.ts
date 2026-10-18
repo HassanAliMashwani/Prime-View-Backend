@@ -24,6 +24,7 @@ import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto
 import { UploadCustomerDocumentDto } from './dto/customer-document.dto';
 import { UpdateCustomerProfileDto } from './dto/update-customer-profile.dto';
 import { ChangeCustomerPasswordDto } from './dto/change-customer-password.dto';
+import { SetPaymentPlanDto } from './dto/set-payment-plan.dto';
 
 @Controller('customers')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
@@ -209,5 +210,16 @@ export class CustomersController {
     @CurrentSession() session: any,
   ) {
     return this.customersService.changePassword(id, dto, session);
+  }
+
+  @Post(':id/plots/:plotId/payment-plan')
+  @HttpCode(HttpStatus.OK)
+  async setPaymentPlan(
+    @Param('id') id: string,
+    @Param('plotId') plotId: string,
+    @Body() dto: SetPaymentPlanDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.customersService.setPaymentPlanForHeldPlot(id, plotId, dto, session);
   }
 }

@@ -21,6 +21,7 @@ import {
 } from '@prisma/client';
 import { CreateMinimalBookingDto } from './dto/create-minimal-booking.dto';
 import { CompleteRegistrationDto } from './dto/complete-registration.dto';
+import { SetPaymentPlanDto } from './dto/set-payment-plan.dto';
 import { CreateCustomerWithBookingDto } from './dto/create-customer-with-booking.dto';
 import { AddBookingDto } from './dto/add-booking.dto';
 import { AssignStrikeDto, ToggleSuspensionDto } from './dto/customer-actions.dto';
@@ -265,6 +266,12 @@ export class CustomersService {
         c.bookings.forEach(b => {
           if (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId))) {
             plotCount++;
+            const billsCount = b.payments
+              ? b.payments.filter((p: any) =>
+                  ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+                ).length
+              : 0;
+            const hasPaymentPlan = billsCount > 0;
             plots.push({
               id: b.plot.id,
               plotId: b.plot.id,
@@ -278,6 +285,8 @@ export class CustomersService {
               price: Number(b.plot.price || 0),
               paymentType: (b.paymentType as any) || 'installment',
               bookingDate: b.bookingDate ? b.bookingDate.toISOString().split('T')[0] : '',
+              hasPaymentPlan,
+              billsCount,
             });
             const price = Number(b.plot.price || 0);
             const paid = b.payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
@@ -505,8 +514,9 @@ export class CustomersService {
     const bookingId = `book-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
-      // 1. Resolve Customer (Attach to existing member if customerId or CNIC exists, else create minimal customer)
+      // 1. Resolve Customer (Picker ID -> CNIC match -> Single Name match -> Refuse if multiple -> Create minimal if new)
       const normalizedCnic = dto.cnic.trim();
+      const trimmedName = dto.customerName.trim();
       let customer: any = null;
       if (dto.customerId) {
         customer = await this.prisma.customer.findUnique({
@@ -524,19 +534,33 @@ export class CustomersService {
         });
       }
 
+      if (!customer && trimmedName) {
+        const matchingByName = await this.prisma.customer.findMany({
+          where: { fullName: { equals: trimmedName, mode: 'insensitive' } },
+        });
+        if (matchingByName.length === 1) {
+          customer = matchingByName[0];
+        } else if (matchingByName.length > 1) {
+          throw new BadRequestException({
+            error: 'MULTIPLE_MEMBERS_MATCH_NAME',
+            message: `Multiple members found with the name "${trimmedName}". Please select the specific member from the member list.`,
+          });
+        }
+      }
+
       if (customer) {
         customer = await tx.customer.update({
           where: { id: customer.id },
           data: {
-            city: dto.city.trim(),
-            mailingAddress: customer.mailingAddress || dto.city.trim(),
+            city: dto.city.trim() || customer.city,
+            mailingAddress: customer.mailingAddress || dto.city.trim() || undefined,
           },
         });
       } else {
         customer = await tx.customer.create({
           data: {
             id: customerId,
-            fullName: dto.customerName.trim(),
+            fullName: trimmedName,
             cnic: normalizedCnic,
             city: dto.city.trim(),
             mailingAddress: dto.city.trim(),
@@ -1412,10 +1436,10 @@ export class CustomersService {
    * Add additional Plot Booking to an existing customer account.
    */
   async addBookingToCustomer(customerId: string, dto: AddBookingDto, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer && !session.permissions?.can_book) {
+    if (session.role !== 'super_admin') {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'You do not have permission to attach plot bookings.',
+        message: 'Only Super Administrator has authority to attach plot bookings and create bills.',
       });
     }
 
@@ -2413,6 +2437,237 @@ export class CustomersService {
       ok: true,
       deletedId: id,
       membershipNo: customer.membershipNo,
+    };
+  }
+
+  /**
+   * Set payment plan on an existing held plot for an already registered member.
+   * Only Super Admin can call this.
+   */
+  async setPaymentPlanForHeldPlot(
+    customerId: string,
+    plotId: string,
+    dto: SetPaymentPlanDto,
+    session: any,
+  ) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'Only Super Administrator has authority to set payment plans and create bills.',
+      });
+    }
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+    });
+
+    if (!customer) {
+      throw new NotFoundException({
+        error: 'CUSTOMER_NOT_FOUND',
+        message: 'Customer record not found.',
+      });
+    }
+
+    if (customer.registrationStatus === 'minimal') {
+      throw new BadRequestException({
+        error: 'MEMBER_REGISTRATION_MINIMAL',
+        message: 'Customer registration is minimal. Complete Member Registration must be used for initial formal onboarding.',
+      });
+    }
+
+    const plot = await this.prisma.plot.findUnique({
+      where: { id: plotId },
+      include: { block: true },
+    });
+
+    if (!plot) {
+      throw new NotFoundException({
+        error: 'PLOT_NOT_FOUND',
+        message: 'Plot not found.',
+      });
+    }
+
+    // Find the held booking for this customer and plot
+    const booking = await this.prisma.booking.findFirst({
+      where: {
+        plotId: plot.id,
+        customerId: customer.id,
+      },
+      include: {
+        payments: true,
+      },
+    });
+
+    if (!booking) {
+      throw new NotFoundException({
+        error: 'BOOKING_NOT_FOUND',
+        message: 'No held booking found for this member and plot.',
+      });
+    }
+
+    const existingPlotBills = booking.payments.filter((p) =>
+      ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+    );
+
+    if (existingPlotBills.length > 0) {
+      throw new BadRequestException({
+        error: 'BILLS_ALREADY_EXIST',
+        message: 'This plot already has an active payment plan and bills generated.',
+      });
+    }
+
+    let effectivePrice = Number(plot.price);
+    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
+      const parsedPrice = Number(dto.plotPrice);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Plot price must be a valid positive amount greater than zero.',
+        });
+      }
+      effectivePrice = parsedPrice;
+    }
+
+    const now = new Date();
+    const pType = dto.paymentType === 'one_time' ? PaymentType.one_time : PaymentType.installment;
+
+    const {
+      installmentPlanData,
+      schedule,
+    } = this.computeInstallmentPlan(effectivePrice, dto.installmentPlan, pType, now);
+
+    const result = await this.prisma.withScopedSession(session, async (tx) => {
+      // 1. Update plot price if modified
+      if (effectivePrice !== Number(plot.price)) {
+        await tx.plot.update({
+          where: { id: plot.id },
+          data: { price: effectivePrice },
+        });
+        plot.price = effectivePrice as any;
+      }
+
+      // 2. Update plot status if full payment
+      const targetPlotStatus = pType === PaymentType.one_time ? PlotStatus.allotted : PlotStatus.booked;
+      if (plot.status !== targetPlotStatus) {
+        await updatePlotStatus(tx, {
+          plotId: plot.id,
+          fromStatus: plot.status,
+          toStatus: targetPlotStatus,
+          changedBy: session.adminId || session.username,
+          source: pType === PaymentType.one_time ? 'allot' : 'book',
+          plotData: {
+            currentOwnerId: customer.id,
+            lockedBy: null,
+            lockedAt: null,
+          },
+        });
+      }
+
+      // 3. Update Booking
+      const updatedBooking = await tx.booking.update({
+        where: { id: booking.id },
+        data: {
+          paymentType: pType,
+          status: 'completed',
+          registrationStatus: 'complete',
+          confirmationDate: now,
+          installmentPlan: installmentPlanData,
+          paperInstallmentRef: dto.paperInstallmentRef?.trim() || booking.paperInstallmentRef,
+        },
+      });
+
+      // 4. Create bills - ZERO statutory fees (no admission fee, no share subscription fee)
+      const paymentRecords: any[] = [];
+      if (pType === PaymentType.one_time) {
+        const fullPay = await tx.paymentRecord.create({
+          data: {
+            id: `pay-one-${booking.id}`,
+            bookingId: booking.id,
+            feeType: FeeType.plot_one_time,
+            dueDate: now,
+            amount: effectivePrice,
+            paidAmount: effectivePrice,
+            status: PaymentStatus.paid,
+          },
+        });
+        paymentRecords.push(fullPay);
+      } else {
+        const billsToCreate = schedule.map((item, i) => ({
+          id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}`,
+          bookingId: booking.id,
+          feeType: item.feeType,
+          installmentNumber: item.installmentNumber,
+          dueDate: item.dueDate,
+          amount: item.amount,
+          paidAmount: item.paidAmount,
+          status: item.status,
+        }));
+        await tx.paymentRecord.createMany({ data: billsToCreate });
+        paymentRecords.push(...billsToCreate);
+      }
+
+      // 5. Society Documents
+      const agrDoc = await tx.societyDocument.create({
+        data: {
+          id: `doc-${booking.id}-agr-${Date.now()}`,
+          customerId: customer.id,
+          bookingId: booking.id,
+          type: GeneratedDocType.booking_agreement,
+          fileName: `Allotment_Agreement_${customer.membershipNo || 'Customer'}_${plot.plotNumber}.pdf`,
+          fileUrl: `/documents/booking-agreement-${booking.id}.pdf`,
+          fileSizeKb: 1420,
+        },
+      });
+
+      const schDoc = await tx.societyDocument.create({
+        data: {
+          id: `doc-${booking.id}-sch-${Date.now()}`,
+          customerId: customer.id,
+          bookingId: booking.id,
+          type: GeneratedDocType.installment_schedule,
+          fileName: `Installment_Schedule_${customer.membershipNo || 'Customer'}_${plot.plotNumber}.pdf`,
+          fileUrl: `/documents/installment-schedule-${booking.id}.pdf`,
+          fileSizeKb: 1420,
+        },
+      });
+
+      // 6. Audit Entry
+      await tx.auditEntry.create({
+        data: {
+          actorId: session.adminId || session.username,
+          actorName: session.fullName || session.username,
+          actorRole: session.role,
+          action: 'PAYMENT_PLAN_ASSIGNED',
+          entityType: 'booking',
+          entityId: booking.id,
+          details: `Super Admin ${session.fullName || session.username} set payment plan (${pType}) for Plot ${plot.plotNumber} to Member ${customer.fullName} (${customer.membershipNo})`,
+          newValue: {
+            customerId: customer.id,
+            plotNumber: plot.plotNumber,
+            totalPrice: effectivePrice,
+            paymentType: pType,
+            planYears: installmentPlanData?.planYears || 0,
+          },
+        },
+      });
+
+      return {
+        booking: updatedBooking,
+        plot: { ...plot, price: effectivePrice, status: targetPlotStatus },
+        documents: [agrDoc, schDoc],
+        payments: paymentRecords,
+      };
+    });
+
+    await this.realtime.broadcast('customers', 'PAYMENT_PLAN_ASSIGNED', { customerId, plotId });
+    await this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_UPDATED', { plotId: plot.id });
+    await this.realtime.broadcast('plots', 'PLOT_UPDATED', { plotId: plot.id });
+
+    return {
+      ok: true,
+      booking: result.booking,
+      plot: result.plot,
+      paymentsCount: result.payments.length,
     };
   }
 }
