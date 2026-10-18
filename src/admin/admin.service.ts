@@ -731,7 +731,11 @@ export class AdminService {
       currentPermissions.phone = dto.phone.trim();
     }
     if (dto.avatarUrl !== undefined) {
-      currentPermissions.avatarUrl = dto.avatarUrl.trim();
+      const trimmedAvatar = dto.avatarUrl.trim();
+      if (trimmedAvatar.startsWith('data:') || trimmedAvatar.startsWith('blob:')) {
+        throw new BadRequestException('Profile photos must be uploaded to storage. Data or blob URLs are not permitted.');
+      }
+      currentPermissions.avatarUrl = trimmedAvatar;
     }
 
     const updated = await this.prisma.adminUser.update({

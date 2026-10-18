@@ -2002,14 +2002,18 @@ export class CustomersService {
       });
 
       if (dto.applicantPhotoUrl !== undefined) {
-        if (dto.applicantPhotoUrl.trim().length > 0) {
+        const trimmedPhoto = dto.applicantPhotoUrl.trim();
+        if (trimmedPhoto.startsWith('data:') || trimmedPhoto.startsWith('blob:')) {
+          throw new BadRequestException('Profile photos must be uploaded to storage. Data or blob URLs are not permitted.');
+        }
+        if (trimmedPhoto.length > 0) {
           const existingPhoto = await tx.customerDocument.findFirst({
             where: { customerId: id, type: 'applicant_photo' },
           });
           if (existingPhoto) {
             await tx.customerDocument.update({
               where: { id: existingPhoto.id },
-              data: { fileUrl: dto.applicantPhotoUrl.trim() },
+              data: { fileUrl: trimmedPhoto },
             });
           } else {
             await tx.customerDocument.create({
@@ -2017,7 +2021,7 @@ export class CustomersService {
                 customerId: id,
                 type: 'applicant_photo' as any,
                 fileName: 'applicant_photo.jpg',
-                fileUrl: dto.applicantPhotoUrl.trim(),
+                fileUrl: trimmedPhoto,
                 fileSizeKb: 1,
                 uploadedById: session.customerId || session.adminId || session.username,
               },
