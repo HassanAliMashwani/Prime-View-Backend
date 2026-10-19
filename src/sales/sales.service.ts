@@ -153,17 +153,19 @@ export class SalesService {
           b.name as "blockName",
           p.category,
           p.size,
-          a."newValue"->>'salePrice' as price_str,
+          COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0) as price_num,
           c.id as "customerId",
           c."fullName" as "customerName",
           c."membershipNo",
-          a."newValue"->>'paymentType' as "paymentType",
-          a."newValue"->>'bookingId' as "bookingId",
-          COUNT(*) OVER() as "totalCount"
+          COALESCE(a."newValue"->>'paymentType', bk."paymentType"::text, 'installment') as "paymentType",
+          COALESCE(a."newValue"->>'bookingId', bk.id, a."entityId") as "bookingId",
+          COUNT(*) OVER() as "totalCount",
+          SUM(COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0)) OVER() as "totalVolume"
         FROM "AuditEntry" a
-        JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+        LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
+        JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', '')::uuid, bk."plotId")
         JOIN "Block" b ON b.id = p."blockId"
-        JOIN "Customer" c ON c.id = (a."newValue"->>'customerId')
+        JOIN "Customer" c ON c.id = COALESCE(NULLIF(a."newValue"->>'customerId', ''), bk."customerId", p."currentOwnerId")
         ${whereClause}
         ORDER BY a.timestamp DESC
         LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
@@ -171,6 +173,7 @@ export class SalesService {
 
       const rawItems = await this.prisma.$queryRawUnsafe<any[]>(itemsQuery, ...params);
       const total = rawItems.length > 0 ? Number(rawItems[0].totalCount || 0) : 0;
+      const totalRevenuePkr = rawItems.length > 0 ? Number(rawItems[0].totalVolume || 0) : 0;
 
       // 5. Format Output
       const items = rawItems.map(row => {
@@ -187,7 +190,7 @@ export class SalesService {
           blockName: row.blockName,
           category: row.category,
           size: row.size,
-          price: Number(row.price_str || 0),
+          price: Number(row.price_num || 0),
           customerId: row.customerId,
           customerName: row.customerName,
           membershipNo: row.membershipNo || '—',
@@ -198,6 +201,8 @@ export class SalesService {
         };
       });
 
+      const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
+
       return {
         ok: true,
         items,
@@ -206,9 +211,9 @@ export class SalesService {
         pageSize,
         kpis: {
           totalPlotsSold: total,
-          totalRevenuePkr: 0,
-          todayPlotsSold: 0,
-          todayRevenuePkr: 0,
+          totalRevenuePkr,
+          todayPlotsSold: todayStats.todayPlotsSold,
+          todayRevenuePkr: todayStats.todayRevenuePkr,
           topCloser: null,
           salesByCategory: {},
         }
@@ -266,9 +271,10 @@ export class SalesService {
     const query = `
       SELECT 
         COUNT(*) as "todayPlotsSold",
-        SUM((a."newValue"->>'salePrice')::numeric) as "todayRevenuePkr"
+        COALESCE(SUM(COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0)), 0) as "todayRevenuePkr"
       FROM "AuditEntry" a
-      JOIN "Plot" p ON p.id = (a."newValue"->>'plotId')
+      LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
+      JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', '')::uuid, bk."plotId")
       ${whereClause}
     `;
     const res = await this.prisma.$queryRawUnsafe<any[]>(query, ...params);

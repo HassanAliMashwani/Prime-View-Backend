@@ -188,13 +188,6 @@ export class PlotsService {
         });
       }
 
-      if (Number(plot.price) <= 0) {
-        throw new BadRequestException({
-          error: 'PRICE_NOT_SET',
-          message: 'Plot has an official price of 0 and cannot be locked or booked',
-        });
-      }
-
       if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
         throw new ConflictException({
           error: 'PLOT_NOT_AVAILABLE',
@@ -986,13 +979,6 @@ export class PlotsService {
    * PaymentRecord.amount is NEVER touched.
    */
   async updatePlotPrice(plotId: string, dto: UpdatePlotPriceDto, session: any) {
-    if (session.role !== 'super_admin') {
-      throw new ForbiddenException({
-        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
-        message: 'Plot pricing adjustments are strictly restricted to Super Administrators.',
-      });
-    }
-
     if (!dto.price || dto.price <= 0) {
       throw new BadRequestException({
         error: 'INVALID_PRICE',
@@ -1019,15 +1005,33 @@ export class PlotsService {
         });
       }
 
-      // Check if plot has paid payments that would require rewriting the ledger
-      const hasPaidPayments = plot.bookings.some((b) =>
-        b.payments.some((p) => p.status === 'paid' && Number(p.paidAmount) > 0)
+      const isSuper = session.role === 'super_admin';
+      const isAuthorizedSubAdmin =
+        Boolean(session.permissions?.can_book) &&
+        Array.isArray(session.assignedBlocks) &&
+        session.assignedBlocks.includes(plot.blockId);
+
+      if (!isSuper && !isAuthorizedSubAdmin) {
+        throw new ForbiddenException({
+          error: 'FORBIDDEN',
+          message: 'Plot pricing adjustments require Super Admin or Sub-Admin with Book Plots permission in this block.',
+        });
+      }
+
+      // Check if plot has paid plot payments
+      const hasPaidPlotPayments = plot.bookings.some((b) =>
+        b.payments.some(
+          (p) =>
+            p.status === 'paid' &&
+            Number(p.paidAmount) > 0 &&
+            ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession', 'plot_one_time'].includes(p.feeType),
+        ),
       );
 
-      if (hasPaidPayments) {
+      if (hasPaidPlotPayments) {
         throw new ConflictException({
           error: 'CANNOT_MODIFY_PRICE_WITH_PAID_RECORDS',
-          message: 'Cannot modify plot price when paid payment records already exist in ledger.',
+          message: 'Cannot change plot price because plot payments have already been recorded.',
         });
       }
 
@@ -1040,6 +1044,114 @@ export class PlotsService {
           price: new Prisma.Decimal(newPrice),
         },
       });
+
+      for (const booking of plot.bookings) {
+        if (booking.installmentPlan) {
+          const plan = booking.installmentPlan as any;
+          const planYears = Number(plan.planYears || plan.years || 1);
+          const downpayment = Math.floor(newPrice * 0.25);
+          const monthlyCount = planYears * 12;
+          const biannualCount = planYears * 2;
+          const numberOfInstallments = monthlyCount + biannualCount;
+
+          await tx.booking.update({
+            where: { id: booking.id },
+            data: {
+              installmentPlan: {
+                ...plan,
+                totalPayment: newPrice,
+                downpayment,
+                monthlyInstallmentCount: monthlyCount,
+                biannualInstallmentCount: biannualCount,
+                numberOfInstallments,
+              },
+            },
+          });
+
+          // Check if this booking had existing plot bills
+          const existingPlotBills = (booking.payments || []).filter((p: any) =>
+            ['plot_installment', 'plot_downpayment', 'plot_one_time', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+          );
+
+          if (existingPlotBills.length > 0) {
+            // Delete only unpaid plot bills
+            await tx.paymentRecord.deleteMany({
+              where: {
+                bookingId: booking.id,
+                feeType: { in: [FeeType.plot_installment, FeeType.plot_downpayment, FeeType.plot_one_time, FeeType.plot_biannual, FeeType.plot_possession] },
+                paidAmount: 0,
+                status: { not: PaymentStatus.paid },
+              },
+            });
+
+            if (booking.paymentType === PaymentType.installment) {
+              const schedule = generateFixedSchedule({
+                plotPriceRupees: newPrice,
+                planYears,
+                bookingDate: booking.bookingDate || new Date(),
+              });
+
+              // Check if downpayment was already paid
+              const existingPaidDown = existingPlotBills.find(
+                (p: any) => p.feeType === 'plot_downpayment' && (p.paidAmount > 0 || p.status === 'paid'),
+              );
+
+              const billsToCreate: any[] = [];
+              for (let i = 0; i < schedule.length; i++) {
+                const item = schedule[i];
+                if (item.feeType === FeeType.plot_downpayment && existingPaidDown) {
+                  continue;
+                }
+                billsToCreate.push({
+                  id: `pay-${item.feeType}-${booking.id}-${item.installmentNumber ?? i}-${Date.now()}-${i}`,
+                  bookingId: booking.id,
+                  feeType: item.feeType,
+                  installmentNumber: item.installmentNumber,
+                  dueDate: item.dueDate,
+                  amount: item.amount,
+                  paidAmount: item.paidAmount,
+                  status: item.status,
+                });
+              }
+              if (billsToCreate.length > 0) {
+                await tx.paymentRecord.createMany({ data: billsToCreate });
+              }
+            } else if (booking.paymentType === PaymentType.one_time) {
+              await tx.paymentRecord.create({
+                data: {
+                  id: `pay-one-${booking.id}-${Date.now()}`,
+                  bookingId: booking.id,
+                  feeType: FeeType.plot_one_time,
+                  dueDate: new Date(),
+                  amount: newPrice,
+                  paidAmount: 0,
+                  status: PaymentStatus.pending,
+                },
+              });
+            }
+          }
+
+          await tx.auditEntry.updateMany({
+            where: {
+              action: 'PLOT_BOOKED',
+              OR: [
+                { entityId: booking.id },
+                { newValue: { path: ['bookingId'], equals: booking.id } },
+              ],
+            },
+            data: {
+              newValue: {
+                plotId: plot.id,
+                customerId: booking.customerId,
+                bookingId: booking.id,
+                paymentType: booking.paymentType,
+                salePrice: newPrice,
+                plotNumber: plot.plotNumber,
+              },
+            },
+          });
+        }
+      }
 
       await tx.auditEntry.create({
         data: {

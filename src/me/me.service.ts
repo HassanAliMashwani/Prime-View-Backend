@@ -8,7 +8,12 @@ export class MeService {
   async getPlots(customerId: string) {
     return this.prisma.withScopedSession({ role: 'customer', customerId }, async (tx) => {
       const plots = await tx.plot.findMany({
-        where: { currentOwnerId: customerId },
+        where: {
+          OR: [
+            { currentOwnerId: customerId },
+            { bookings: { some: { customerId } } },
+          ],
+        },
         include: {
           reservations: {
             where: { customerId },
@@ -23,12 +28,10 @@ export class MeService {
       });
 
       return plots.map((p: any) => {
-        const b = p.bookings && p.bookings.length > 0 ? p.bookings[0] : null;
-        const billsCount = b && b.payments
-          ? b.payments.filter((pay: any) =>
-              ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(pay.feeType),
-            ).length
-          : 0;
+        const allPayments = (p.bookings || []).flatMap((booking: any) => booking.payments || []);
+        const billsCount = allPayments.filter((pay: any) =>
+          ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(pay.feeType),
+        ).length;
         const hasPaymentPlan = billsCount > 0;
 
         return {

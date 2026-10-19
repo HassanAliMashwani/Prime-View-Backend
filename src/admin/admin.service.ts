@@ -198,7 +198,7 @@ export class AdminService {
       const perm = (u.permissions && typeof u.permissions === 'object') ? (u.permissions as any) : {};
       return {
         ...u,
-        avatarUrl: perm.avatarUrl || '',
+        avatarUrl: perm.avatarUrl && perm.avatarUrl.startsWith('https://') ? perm.avatarUrl : '',
         phone: perm.phone || '',
         assignedBlocks: u.assignments.map((a) => a.blockId),
       };
@@ -671,7 +671,7 @@ export class AdminService {
         email: admin.email,
         fullName: admin.fullName,
         phone: permissionsObj.phone || '',
-        avatarUrl: permissionsObj.avatarUrl || '',
+        avatarUrl: permissionsObj.avatarUrl && permissionsObj.avatarUrl.startsWith('https://') ? permissionsObj.avatarUrl : '',
         role: admin.role,
         status: admin.status,
         permissions: admin.permissions,
@@ -735,6 +735,9 @@ export class AdminService {
       if (trimmedAvatar.startsWith('data:') || trimmedAvatar.startsWith('blob:')) {
         throw new BadRequestException('Profile photos must be uploaded to storage. Data or blob URLs are not permitted.');
       }
+      if (trimmedAvatar && !trimmedAvatar.startsWith('https://')) {
+        throw new BadRequestException('Profile photo URL must be an https link.');
+      }
       currentPermissions.avatarUrl = trimmedAvatar;
     }
 
@@ -758,7 +761,7 @@ export class AdminService {
         email: updated.email,
         fullName: updated.fullName,
         phone: currentPermissions.phone || '',
-        avatarUrl: currentPermissions.avatarUrl || '',
+        avatarUrl: currentPermissions.avatarUrl && currentPermissions.avatarUrl.startsWith('https://') ? currentPermissions.avatarUrl : '',
         role: updated.role,
         status: updated.status,
         permissions: updated.permissions,

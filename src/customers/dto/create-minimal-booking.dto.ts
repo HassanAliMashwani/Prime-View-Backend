@@ -1,4 +1,5 @@
-import { IsString, IsNotEmpty, IsOptional, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, Matches, IsNumber } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateMinimalBookingDto {
   @IsString()
@@ -31,4 +32,9 @@ export class CreateMinimalBookingDto {
   @IsString()
   @IsOptional()
   customerId?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Type(() => Number)
+  plotPrice?: number;
 }

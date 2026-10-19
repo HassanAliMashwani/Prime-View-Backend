@@ -22,6 +22,13 @@ import { allocateBalloon, PaymentRecordRow } from './balloon-engine';
 import { updatePlotStatus, maybeAllotIfFullyPaid } from '../plots/update-plot-status';
 import { generateSlipNumber } from './receipt-number.generator';
 
+export function stripRoleFromOfficerName(name?: string | null): string {
+  if (!name) return '';
+  return name
+    .replace(/\s*\((?:super\s*admin(?:istrator)?|sub\s*admin(?:istrator)?)\)\s*$/i, '')
+    .trim();
+}
+
 export function formatCanonicalVal(val: any): string {
   if (val === null || val === undefined) {
     return '<NULL>';
@@ -1297,7 +1304,7 @@ export class ReceiptsService {
         const rawCnic = receipt.customer?.cnic || '';
         const cnicDigits = rawCnic.replace(/\D/g, '');
         const cnicLast4Snapshot = cnicDigits.length >= 4 ? cnicDigits.slice(-4) : (cnicDigits || null);
-        const issuedByName = session.fullName || session.username || null;
+        const issuedByName = stripRoleFromOfficerName(session.fullName || session.username || null) || null;
         const issuedByAdminId = session.adminId || session.username || null;
 
         // ── 5. UPDATE RECEIPT, PAYMENT, ALLOCATION, AUDIT IN SAME TX ────────
@@ -1416,30 +1423,39 @@ export class ReceiptsService {
           }
           finalAllocations = engineResult.allocations;
 
-          for (const alloc of finalAllocations) {
-            await tx.paymentAllocation.create({
-              data: {
-                receiptId,
-                paymentRecordId: alloc.paymentRecordId,
-                amountApplied: alloc.amountApplied,
-                allocationType: alloc.allocationType,
-              },
+          if (finalAllocations && finalAllocations.length > 0) {
+            // Write the allocations in one batch
+            const allocationsToInsert = finalAllocations.map((alloc: any) => ({
+              id: crypto.randomUUID ? crypto.randomUUID() : `alloc-${receiptId}-${alloc.paymentRecordId}-${Date.now()}`,
+              receiptId,
+              paymentRecordId: alloc.paymentRecordId,
+              amountApplied: alloc.amountApplied,
+              allocationType: alloc.allocationType,
+            }));
+            await tx.paymentAllocation.createMany({
+              data: allocationsToInsert,
             });
 
-            const currentPr = await tx.paymentRecord.findUnique({ where: { id: alloc.paymentRecordId } });
-            if (currentPr) {
-              const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
-              const newStatus = newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid';
-              await tx.paymentRecord.update({
-                where: { id: currentPr.id },
-                data: {
-                  paidAmount: newPaidAmount,
-                  status: newStatus,
-                  paidDate: currentPr.paidDate ?? receipt.paymentDate,
-                  transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
-                },
-              });
-            }
+            // Update the affected bills
+            const paymentMap = new Map(payments.map((p) => [p.id, p]));
+            await Promise.all(
+              finalAllocations.map(async (alloc: any) => {
+                const currentPr = paymentMap.get(alloc.paymentRecordId);
+                if (currentPr) {
+                  const newPaidAmount = Number(currentPr.paidAmount) + alloc.amountApplied;
+                  const newStatus = newPaidAmount >= Number(currentPr.amount) ? 'paid' : 'partially_paid';
+                  return tx.paymentRecord.update({
+                    where: { id: currentPr.id },
+                    data: {
+                      paidAmount: newPaidAmount,
+                      status: newStatus,
+                      paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                      transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+                    },
+                  });
+                }
+              }),
+            );
           }
         }
 
@@ -2436,7 +2452,7 @@ export class ReceiptsService {
             plotNumber: receipt.plotNumberSnapshot ?? null,
             amount: receipt.amountSnapshot,
             paymentDate,
-            issuer: receipt.issuedByNameSnapshot || null,
+            issuer: stripRoleFromOfficerName(receipt.issuedByNameSnapshot) || null,
             securityHashDisplay: receipt.integrityHash ? receipt.integrityHash.substring(0, 16) : null,
             hashKeyVersion: receipt.hashKeyVersion,
           };
