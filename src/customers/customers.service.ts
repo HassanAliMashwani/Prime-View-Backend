@@ -845,8 +845,14 @@ export class CustomersService {
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
-    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
-      const parsedPrice = Number(dto.plotPrice);
+    const candidatePrice = (dto.plotPrice !== undefined && dto.plotPrice !== null)
+      ? Number(dto.plotPrice)
+      : (dto.installmentPlan?.totalPayment !== undefined && dto.installmentPlan?.totalPayment !== null)
+        ? Number(dto.installmentPlan.totalPayment)
+        : undefined;
+
+    if (candidatePrice !== undefined) {
+      const parsedPrice = Number(candidatePrice);
       if (isNaN(parsedPrice) || parsedPrice <= 0) {
         throw new BadRequestException({
           error: 'INVALID_PLOT_PRICE',
@@ -1292,8 +1298,14 @@ export class CustomersService {
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
-    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
-      const parsedPrice = Number(dto.plotPrice);
+    const candidatePrice = (dto.plotPrice !== undefined && dto.plotPrice !== null)
+      ? Number(dto.plotPrice)
+      : (dto.installmentPlan?.totalPayment !== undefined && dto.installmentPlan?.totalPayment !== null)
+        ? Number(dto.installmentPlan.totalPayment)
+        : undefined;
+
+    if (candidatePrice !== undefined) {
+      const parsedPrice = Number(candidatePrice);
       if (isNaN(parsedPrice) || parsedPrice <= 0) {
         throw new BadRequestException({
           error: 'INVALID_PLOT_PRICE',
@@ -1621,8 +1633,14 @@ export class CustomersService {
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
-    if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
-      const parsedPrice = Number(dto.plotPrice);
+    const candidatePrice = (dto.plotPrice !== undefined && dto.plotPrice !== null)
+      ? Number(dto.plotPrice)
+      : (dto.installmentPlan?.totalPayment !== undefined && dto.installmentPlan?.totalPayment !== null)
+        ? Number(dto.installmentPlan.totalPayment)
+        : undefined;
+
+    if (candidatePrice !== undefined) {
+      const parsedPrice = Number(candidatePrice);
       if (isNaN(parsedPrice) || parsedPrice <= 0) {
         throw new BadRequestException({
           error: 'INVALID_PLOT_PRICE',
@@ -2724,9 +2742,15 @@ export class CustomersService {
       }
 
       let effectivePrice = Number(plot.price);
-      const priceTypedOnThisSave = dto.plotPrice !== undefined && dto.plotPrice !== null && Number(dto.plotPrice) > 0;
-      if (dto.plotPrice !== undefined && dto.plotPrice !== null) {
-        const parsedPrice = Number(dto.plotPrice);
+      const candidatePrice = (dto.plotPrice !== undefined && dto.plotPrice !== null)
+        ? Number(dto.plotPrice)
+        : (dto.installmentPlan?.totalPayment !== undefined && dto.installmentPlan?.totalPayment !== null)
+          ? Number(dto.installmentPlan.totalPayment)
+          : undefined;
+
+      const priceTypedOnThisSave = candidatePrice !== undefined && candidatePrice > 0;
+      if (candidatePrice !== undefined) {
+        const parsedPrice = Number(candidatePrice);
         if (isNaN(parsedPrice) || parsedPrice <= 0) {
           throw new BadRequestException({
             error: 'INVALID_PLOT_PRICE',

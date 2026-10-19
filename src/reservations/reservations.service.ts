@@ -40,31 +40,46 @@ export class ReservationsService {
     const skip = (page - 1) * pageSize;
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      const where: any = {};
+      const andConditions: any[] = [];
       
       if (query.status && query.status !== 'all') {
         if (query.status === 'history') {
-          where.status = { not: 'active' };
+          andConditions.push({ status: { not: 'active' } });
         } else {
-          where.status = query.status;
+          andConditions.push({ status: query.status });
         }
       }
       
-      if (query.blockId && query.blockId !== 'all') {
-        where.plot = { blockId: query.blockId };
-      }
-      
       if (query.search) {
-        where.OR = [
-          { customerName: { contains: query.search, mode: 'insensitive' } },
-          { customerPhone: { contains: query.search, mode: 'insensitive' } },
-        ];
+        andConditions.push({
+          OR: [
+            { customerName: { contains: query.search, mode: 'insensitive' } },
+            { customerPhone: { contains: query.search, mode: 'insensitive' } },
+            { plot: { plotNumber: { contains: query.search, mode: 'insensitive' } } },
+          ],
+        });
       }
 
-      if (session.role !== 'super_admin' && session.assignedBlocks) {
-        if (!where.plot) where.plot = {};
-        where.plot.blockId = { in: session.assignedBlocks };
+      if (session.role !== 'super_admin') {
+        const assignedBlocks = session.assignedBlocks || [];
+        const scopeConditions: any[] = [
+          { plot: { blockId: { in: assignedBlocks } } },
+        ];
+        if (session.adminId) scopeConditions.push({ reservedByAdminId: session.adminId });
+        if (session.username) scopeConditions.push({ reservedByAdminId: session.username });
+
+        andConditions.push({ OR: scopeConditions });
+
+        if (query.blockId && query.blockId !== 'all') {
+          andConditions.push({ plot: { blockId: query.blockId } });
+        }
+      } else {
+        if (query.blockId && query.blockId !== 'all') {
+          andConditions.push({ plot: { blockId: query.blockId } });
+        }
       }
+
+      const where = andConditions.length > 0 ? { AND: andConditions } : {};
 
       const [items, total] = await Promise.all([
         tx.reservation.findMany({
@@ -129,7 +144,7 @@ export class ReservationsService {
   async release(id: string, session: any) {
     const reservation = await this.getReservationMeta(id, session);
 
-    const isOwner = reservation.reservedByAdminId === session.adminId;
+    const isOwner = reservation.reservedByAdminId === session.adminId || reservation.reservedByAdminId === session.username;
     const isSuperAdmin = session.role === 'super_admin';
 
     if (!isOwner && !isSuperAdmin) {

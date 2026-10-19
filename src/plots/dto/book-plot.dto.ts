@@ -42,30 +42,37 @@ export class CustomerInfoDto {
 export class InstallmentPlanDto {
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   totalPayment?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   downpayment?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   planYears?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   years?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   paidAfterEveryMonths?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   paidAfterEvery?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   numberOfInstallments?: number;
 }
 
@@ -85,10 +92,12 @@ export class BookPlotDto {
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   salePrice?: number;
 
   @IsNumber()
   @IsOptional()
+  @Type(() => Number)
   downPayment?: number;
 
   @ValidateNested()

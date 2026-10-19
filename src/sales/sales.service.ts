@@ -75,8 +75,13 @@ export class SalesService {
       }
 
       if (filters.adminId && filters.adminId !== 'all') {
-        conditions.push(`a."actorId" = $${paramIdx++}`);
+        conditions.push(`(
+          a."actorId" = $${paramIdx} 
+          OR a."actorId" IN (SELECT u.username FROM "AdminUser" u WHERE u.id = $${paramIdx})
+          OR a."actorId" IN (SELECT u.id FROM "AdminUser" u WHERE u.username = $${paramIdx})
+        )`);
         params.push(filters.adminId);
+        paramIdx++;
       }
 
       const now = new Date();
@@ -255,8 +260,13 @@ export class SalesService {
     let paramIdx = 1;
 
     if (filterAdminId && filterAdminId !== 'all') {
-      conditions.push(`a."actorId" = $${paramIdx++}`);
+      conditions.push(`(
+        a."actorId" = $${paramIdx} 
+        OR a."actorId" IN (SELECT u.username FROM "AdminUser" u WHERE u.id = $${paramIdx})
+        OR a."actorId" IN (SELECT u.id FROM "AdminUser" u WHERE u.username = $${paramIdx})
+      )`);
       params.push(filterAdminId);
+      paramIdx++;
     }
     if (assignedBlocks !== null) {
       if (assignedBlocks.length === 0) {
