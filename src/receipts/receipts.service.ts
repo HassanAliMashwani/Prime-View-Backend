@@ -128,6 +128,7 @@ const lightweightReceiptSelect = {
   hashKeyVersion: true,
   uploadedAt: true,
   replacesReceiptId: true,
+  issuedByNameSnapshot: true,
 };
 
 @Injectable()
@@ -611,6 +612,7 @@ export class ReceiptsService {
           qrTarget: true,
           securityHash: true,
           uploadedAt: true,
+          issuedByNameSnapshot: true,
           customer: {
             select: {
               id: true,
@@ -625,6 +627,16 @@ export class ReceiptsService {
         },
         orderBy: { uploadedAt: 'desc' },
       });
+
+      const adminIds = [...new Set(receipts.map((r) => r.verifiedByAdminId).filter(Boolean))] as string[];
+      let adminMap = new Map<string, { fullName: string; username: string }>();
+      if (adminIds.length > 0) {
+        const admins = await tx.adminUser.findMany({
+          where: { id: { in: adminIds } },
+          select: { id: true, fullName: true, username: true },
+        });
+        admins.forEach((a) => adminMap.set(a.id, a));
+      }
 
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
@@ -656,8 +668,16 @@ export class ReceiptsService {
         const plotNumber = booking?.plot?.plotNumber || '';
         const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
 
+        const verifiedOfficerName =
+          r.issuedByNameSnapshot && r.issuedByNameSnapshot.trim()
+            ? r.issuedByNameSnapshot.trim()
+            : r.verifiedByAdminId
+            ? (adminMap.get(r.verifiedByAdminId)?.fullName || adminMap.get(r.verifiedByAdminId)?.username || null)
+            : null;
+
         return {
           ...r,
+          verifiedByAdminName: verifiedOfficerName,
           hasPhoto: photoMap.get(r.id) ?? false,
           paymentDate: r.paymentDate ? (r.paymentDate instanceof Date ? r.paymentDate.toISOString().split('T')[0] : String(r.paymentDate).split('T')[0]) : null,
           customerName: r.customer?.fullName || '',
@@ -684,7 +704,7 @@ export class ReceiptsService {
             qrTarget: r.qrTarget || undefined,
             qrPayload: r.qrTarget || `/verify/${r.slipNumber}`,
             verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
-            verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
+            verifiedBy: verifiedOfficerName || r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
           } : undefined,
         };
       });
@@ -746,6 +766,16 @@ export class ReceiptsService {
         );
       }
 
+      const adminIds = [...new Set(receipts.map((r) => r.verifiedByAdminId).filter(Boolean))] as string[];
+      let adminMap = new Map<string, { fullName: string; username: string }>();
+      if (adminIds.length > 0) {
+        const admins = await tx.adminUser.findMany({
+          where: { id: { in: adminIds } },
+          select: { id: true, fullName: true, username: true },
+        });
+        admins.forEach((a) => adminMap.set(a.id, a));
+      }
+
       const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
       const bookings = await tx.booking.findMany({
         where: { id: { in: bookingIds } },
@@ -766,8 +796,16 @@ export class ReceiptsService {
         const blockName = booking?.plot?.block?.name || booking?.plot?.blockId || '';
         const photoInfo = photoMap.get(r.id);
 
+        const verifiedOfficerName =
+          r.issuedByNameSnapshot && r.issuedByNameSnapshot.trim()
+            ? r.issuedByNameSnapshot.trim()
+            : r.verifiedByAdminId
+            ? (adminMap.get(r.verifiedByAdminId)?.fullName || adminMap.get(r.verifiedByAdminId)?.username || null)
+            : null;
+
         return {
           ...r,
+          verifiedByAdminName: verifiedOfficerName,
           hasPhoto: photoInfo?.hasPhoto ?? false,
           receiptFileUrl: photoInfo?.receiptFileUrl ?? null,
           customerName: customer?.fullName || (r as any).customerName || '',
@@ -793,7 +831,7 @@ export class ReceiptsService {
             qrTarget: r.qrTarget || undefined,
             qrPayload: r.qrTarget || `/verify/${r.slipNumber}`,
             verifiedAt: r.verifiedAt ? (r.verifiedAt instanceof Date ? r.verifiedAt.toISOString().split('T')[0] : String(r.verifiedAt).split('T')[0]) : null,
-            verifiedBy: r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
+            verifiedBy: verifiedOfficerName || r.verifiedByAdminId || 'Society Secretariat / Finance Officer',
           } : undefined,
         };
       });
@@ -1544,6 +1582,7 @@ export class ReceiptsService {
           promotedPlotNumber: promotedPlotNumber || null,
           receipt: {
             ...updatedReceipt,
+            verifiedByAdminName: issuedByName || session.fullName || session.username,
             customerName: receipt.customer?.fullName,
             membershipNo: receipt.customer?.membershipNo,
             customerCnic: receipt.customer?.cnic,
@@ -1567,6 +1606,7 @@ export class ReceiptsService {
               qrTarget,
               generatedAt: dbIssuedAt.toISOString(),
               qrPayload: qrTarget,
+              verifiedBy: issuedByName || session.fullName || session.username,
               societyAuthorityStamp: `OFFICIAL SOCIETY VERIFICATION • REG NO 411 KPK • VERIFIED BY ${(session.fullName || session.username).toUpperCase()}`,
             },
           },

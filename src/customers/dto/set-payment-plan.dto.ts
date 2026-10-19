@@ -16,8 +16,8 @@ export class SetPaymentPlanDto {
   @IsOptional()
   paperInstallmentRef?: string;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   plotPrice?: number;
 }

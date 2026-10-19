@@ -25,8 +25,12 @@ export class InquiriesController {
     if (!name || name.length < 2) {
       throw new BadRequestException('Please provide a valid name (at least 2 characters).');
     }
-    if (!phone || phone.length < 8) {
+    const phoneDigits = (phone || '').replace(/\D/g, '');
+    if (!phone || phoneDigits.length < 8) {
       throw new BadRequestException('Please provide a valid phone number.');
+    }
+    if (phoneDigits.length > 11) {
+      throw new BadRequestException('Phone number cannot be greater than 11 digits.');
     }
     if (!message || message.length < 5) {
       throw new BadRequestException('Please provide an inquiry message.');

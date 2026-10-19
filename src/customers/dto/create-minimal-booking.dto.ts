@@ -33,8 +33,8 @@ export class CreateMinimalBookingDto {
   @IsOptional()
   customerId?: string;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   plotPrice?: number;
 }

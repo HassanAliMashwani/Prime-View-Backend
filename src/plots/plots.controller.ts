@@ -30,6 +30,11 @@ export class PlotsController {
     return this.plotsService.findAll(blockId, session, search);
   }
 
+  @Get('sync/locks')
+  async getBlockLocks(@Query('blockId') blockId: string, @CurrentSession() session: any) {
+    return this.plotsService.getBlockLocks(blockId, session);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string, @CurrentSession() session: any) {
     return this.plotsService.findOne(id, session);

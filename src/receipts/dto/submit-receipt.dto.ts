@@ -6,6 +6,7 @@ import {
   IsIn,
   Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class SubmitReceiptDto {
   @IsString()
@@ -20,9 +21,11 @@ export class SubmitReceiptDto {
   paymentKind?: 'regular' | 'balloon';
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   installmentNumber?: number;
 
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   amount: number;

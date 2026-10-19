@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, ValidateNested, IsNumber } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEnum, ValidateNested, IsNumber, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class CustomerInfoDto {
@@ -12,10 +12,16 @@ export class CustomerInfoDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^(?:0\d{10}|0\d{3}-\d{7})$/, {
+    message: 'Phone number cannot be greater than 11 digits and must follow 03XXXXXXXXX or 03XX-XXXXXXX format.',
+  })
   phone: string;
 
   @IsString()
   @IsOptional()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   cnic?: string;
 
   @IsString()
@@ -36,43 +42,46 @@ export class CustomerInfoDto {
 
   @IsString()
   @IsOptional()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   nokCnic?: string;
 }
 
 export class InstallmentPlanDto {
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   totalPayment?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   downpayment?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   planYears?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   years?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   paidAfterEveryMonths?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   paidAfterEvery?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   numberOfInstallments?: number;
 }
 
@@ -90,14 +99,14 @@ export class BookPlotDto {
   @IsNotEmpty()
   paymentType: 'one_time' | 'installment';
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   salePrice?: number;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   downPayment?: number;
 
   @ValidateNested()

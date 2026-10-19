@@ -214,6 +214,30 @@ export class AdminService {
   }
 
   /**
+   * 1b. GET /admin/blocks
+   * Retrieve list of all blocks that exist in the Block table.
+   */
+  async getBlocks(session: any) {
+    if (session.role !== 'super_admin') {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN_SUPER_ADMIN_ONLY',
+        message: 'Block retrieval for staff management is restricted to Super Administrators.',
+      });
+    }
+
+    const blocks = await this.prisma.block.findMany({
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        totalPlots: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+    return { ok: true, blocks };
+  }
+
+  /**
    * 2. POST /admin/sub-admins
    * Create a new Sub Administrator with specific permissions and block scoping.
    */
@@ -267,6 +291,22 @@ export class AdminService {
 
     const newAdminId = `admin-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const assignedBlocks = dto.assignedBlocks || [];
+
+    // Verify all assigned blocks exist in the Block table
+    if (assignedBlocks.length > 0) {
+      const existingBlocks = await this.prisma.block.findMany({
+        where: { id: { in: assignedBlocks } },
+        select: { id: true },
+      });
+      const existingBlockIds = new Set(existingBlocks.map((b) => b.id));
+      const invalidBlocks = assignedBlocks.filter((bId) => !existingBlockIds.has(bId));
+      if (invalidBlocks.length > 0) {
+        throw new BadRequestException({
+          error: 'INVALID_BLOCK',
+          message: `The selected block (${invalidBlocks.join(', ')}) does not exist in the database.`,
+        });
+      }
+    }
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       const created = await tx.adminUser.create({
@@ -406,6 +446,22 @@ export class AdminService {
     let passwordHash: string | undefined = undefined;
     if (dto.password && dto.password.trim().length > 0) {
       passwordHash = await bcrypt.hash(dto.password.trim(), 10);
+    }
+
+    // Verify all assigned blocks exist in the Block table BEFORE altering assignments
+    if (dto.assignedBlocks !== undefined && dto.assignedBlocks.length > 0) {
+      const existingBlocks = await this.prisma.block.findMany({
+        where: { id: { in: dto.assignedBlocks } },
+        select: { id: true },
+      });
+      const existingBlockIds = new Set(existingBlocks.map((b) => b.id));
+      const invalidBlocks = dto.assignedBlocks.filter((bId) => !existingBlockIds.has(bId));
+      if (invalidBlocks.length > 0) {
+        throw new BadRequestException({
+          error: 'INVALID_BLOCK',
+          message: `The selected block (${invalidBlocks.join(', ')}) does not exist in the database.`,
+        });
+      }
     }
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {

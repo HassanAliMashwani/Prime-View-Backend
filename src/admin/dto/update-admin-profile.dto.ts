@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEmail } from 'class-validator';
+import { IsString, IsOptional, IsEmail, Matches } from 'class-validator';
 
 export class UpdateAdminProfileDto {
   @IsOptional()
@@ -15,6 +15,9 @@ export class UpdateAdminProfileDto {
 
   @IsOptional()
   @IsString()
+  @Matches(/^(?:0\d{10}|0\d{3}-\d{7})$/, {
+    message: 'Phone number cannot be greater than 11 digits and must follow 03XXXXXXXXX or 03XX-XXXXXXX format.',
+  })
   phone?: string;
 
   @IsOptional()

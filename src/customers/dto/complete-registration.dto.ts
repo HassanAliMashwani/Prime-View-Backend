@@ -13,6 +13,9 @@ export class CompleteRegistrationDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^(?:0\d{10}|0\d{3}-\d{7})$/, {
+    message: 'Phone number cannot be greater than 11 digits and must follow 03XXXXXXXXX or 03XX-XXXXXXX format.',
+  })
   phone: string;
 
   @IsString()
@@ -29,6 +32,9 @@ export class CompleteRegistrationDto {
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   nokCnic: string;
 
   @IsString()
@@ -74,10 +80,13 @@ export class CompleteRegistrationDto {
 
   @IsString()
   @IsOptional()
+  @Matches(/^\d{5}-\d{7}-\d{1}$/, {
+    message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+  })
   cnic?: string;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   plotPrice?: number;
 }

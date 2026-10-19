@@ -28,8 +28,8 @@ export class AddBookingDto {
   @IsOptional()
   reservationId?: string;
 
-  @IsNumber()
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   plotPrice?: number;
 }

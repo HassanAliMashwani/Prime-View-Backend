@@ -34,7 +34,7 @@ export class PlotsService {
     }
 
     let whereClause: any = {};
-    if (blockId) {
+    if (blockId && blockId !== 'all') {
       whereClause.blockId = blockId;
     } else if (session.role !== 'super_admin') {
       whereClause.blockId = { in: session.assignedBlocks || [] };
@@ -79,7 +79,92 @@ export class PlotsService {
         },
       });
 
-      return plots.map(attachDisplayStatus);
+      const lockedByIds = [...new Set(plots.map((p) => p.lockedBy).filter(Boolean))] as string[];
+      let adminMap = new Map<string, { fullName: string; username: string }>();
+      if (lockedByIds.length > 0) {
+        const admins = await tx.adminUser.findMany({
+          where: { id: { in: lockedByIds } },
+          select: { id: true, fullName: true, username: true },
+        });
+        admins.forEach((a) => adminMap.set(a.id, a));
+      }
+
+      return plots.map((p) => {
+        const withStatus = attachDisplayStatus(p);
+        let lockedByName: string | null = null;
+        if (p.lockedBy) {
+          const admin = adminMap.get(p.lockedBy);
+          lockedByName = admin ? (admin.fullName || admin.username) : null;
+        }
+        return {
+          ...withStatus,
+          lockedByName,
+        };
+      });
+    });
+  }
+
+  /**
+   * Fast lightweight sync: return only active locks and status for plots in a block.
+   * Avoids scanning full rows, geometries, relations, etc.
+   */
+  async getBlockLocks(blockId: string, session: any) {
+    if (session.role !== 'super_admin' && !session.assignedBlocks?.includes(blockId)) {
+      throw new ForbiddenException({
+        error: 'OUT_OF_SCOPE',
+        message: 'You do not have access to this block',
+      });
+    }
+
+    const now = new Date();
+    const lockExpiryWindowMs = 10 * 60 * 1000;
+    const expiryThreshold = new Date(now.getTime() - lockExpiryWindowMs);
+
+    return this.prisma.withScopedSession(session, async (tx) => {
+      const plots = await tx.plot.findMany({
+        where: { blockId },
+        select: {
+          id: true,
+          status: true,
+          lockedBy: true,
+          lockedAt: true,
+          isAdjustment: true,
+        },
+      });
+
+      const activeLockedByIds = [
+        ...new Set(
+          plots
+            .filter((p) => p.lockedBy && p.lockedAt && p.lockedAt >= expiryThreshold)
+            .map((p) => p.lockedBy)
+            .filter(Boolean)
+        ),
+      ] as string[];
+
+      let adminMap = new Map<string, string>();
+      if (activeLockedByIds.length > 0) {
+        const admins = await tx.adminUser.findMany({
+          where: { id: { in: activeLockedByIds } },
+          select: { id: true, fullName: true, username: true },
+        });
+        admins.forEach((a) => adminMap.set(a.id, a.fullName || a.username));
+      }
+
+      return plots.map((p) => {
+        const isLockActive = Boolean(p.lockedBy && p.lockedAt && p.lockedAt >= expiryThreshold);
+        const lockedBy = isLockActive ? p.lockedBy : null;
+        const lockedByName = lockedBy ? (adminMap.get(lockedBy) || 'Admin') : null;
+        const lockedAt = isLockActive && p.lockedAt ? p.lockedAt.toISOString() : null;
+
+        return {
+          id: p.id,
+          status: p.status,
+          isAdjustment: p.isAdjustment,
+          lockedBy,
+          lockedByName,
+          lockedAt,
+        };
+      });
     });
   }
 
@@ -148,7 +233,19 @@ export class PlotsService {
         });
       }
 
-      return attachDisplayStatus(plot);
+      let lockedByName: string | null = null;
+      if (plot.lockedBy) {
+        const admin = await tx.adminUser.findUnique({
+          where: { id: plot.lockedBy },
+          select: { fullName: true, username: true },
+        });
+        lockedByName = admin ? (admin.fullName || admin.username) : null;
+      }
+
+      return {
+        ...attachDisplayStatus(plot),
+        lockedByName,
+      };
     });
   }
 
@@ -169,51 +266,72 @@ export class PlotsService {
     const lockExpiryWindowMs = 10 * 60 * 1000;
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
-      const plot = await tx.plot.findUnique({ where: { id: plotId } });
-      if (!plot) {
-        throw new NotFoundException({ error: 'PLOT_NOT_FOUND', message: 'Plot not found' });
-      }
-
-      if (plot.isAdjustment) {
-        throw new BadRequestException({
-          error: 'PLOT_UNDER_ADJUSTMENT',
-          message: 'Plot is currently under Town Planning adjustment',
-        });
-      }
-
-      if (plot.category === 'amenity') {
-        throw new BadRequestException({
-          error: 'AMENITY_NOT_SELLABLE',
-          message: 'Amenity plots cannot be locked, reserved or booked',
-        });
-      }
-
-      if (plot.status === PlotStatus.booked || plot.status === PlotStatus.allotted || plot.status === PlotStatus.disputed) {
-        throw new ConflictException({
-          error: 'PLOT_NOT_AVAILABLE',
-          message: `Plot is ${plot.status} and cannot be locked`,
-        });
-      }
-
-      // Check existing lock
-      if (plot.lockedBy && plot.lockedBy !== session.adminId) {
-        if (plot.lockedAt && now.getTime() - plot.lockedAt.getTime() <= lockExpiryWindowMs) {
-          throw new ConflictException({
-            error: 'LOCKED_BY_ANOTHER',
-            message: 'Plot is currently locked by another admin',
-            lockedBy: plot.lockedBy,
-            lockedAt: plot.lockedAt,
-          });
-        }
-      }
-
-      const updatedPlot = await tx.plot.update({
-        where: { id: plotId },
+      const expiryThreshold = new Date(now.getTime() - lockExpiryWindowMs);
+      const updateResult = await tx.plot.updateMany({
+        where: {
+          id: plotId,
+          isAdjustment: false,
+          category: { not: 'amenity' },
+          status: { notIn: [PlotStatus.booked, PlotStatus.allotted, PlotStatus.disputed] },
+          OR: [
+            { lockedBy: null },
+            { lockedBy: session.adminId },
+            { lockedAt: null },
+            { lockedAt: { lt: expiryThreshold } },
+          ],
+        },
         data: {
           lockedBy: session.adminId,
           lockedAt: now,
         },
       });
+
+      if (updateResult.count === 0) {
+        // Query current state to determine failure reason
+        const currentPlot = await tx.plot.findUnique({ where: { id: plotId } });
+        if (!currentPlot) {
+          throw new NotFoundException({ error: 'PLOT_NOT_FOUND', message: 'Plot not found' });
+        }
+        if (currentPlot.isAdjustment) {
+          throw new BadRequestException({
+            error: 'PLOT_UNDER_ADJUSTMENT',
+            message: 'Plot is currently under Town Planning adjustment',
+          });
+        }
+        if (currentPlot.category === 'amenity') {
+          throw new BadRequestException({
+            error: 'AMENITY_NOT_SELLABLE',
+            message: 'Amenity plots cannot be locked, reserved or booked',
+          });
+        }
+        if (currentPlot.status === PlotStatus.booked || currentPlot.status === PlotStatus.allotted || currentPlot.status === PlotStatus.disputed) {
+          throw new ConflictException({
+            error: 'PLOT_NOT_AVAILABLE',
+            message: `Plot is ${currentPlot.status} and cannot be locked`,
+          });
+        }
+
+        let lockedByName = 'Another Administrator';
+        if (currentPlot.lockedBy) {
+          const lockingAdmin = await tx.adminUser.findUnique({
+            where: { id: currentPlot.lockedBy },
+            select: { fullName: true, username: true },
+          });
+          if (lockingAdmin) {
+            lockedByName = lockingAdmin.fullName || lockingAdmin.username;
+          }
+        }
+
+        throw new ConflictException({
+          error: 'LOCKED_BY_ANOTHER',
+          message: `Plot is currently locked by ${lockedByName}`,
+          lockedBy: currentPlot.lockedBy,
+          lockedByName,
+          lockedAt: currentPlot.lockedAt,
+        });
+      }
+
+      const updatedPlot = (await tx.plot.findUnique({ where: { id: plotId } }))!;
 
       const audit = await tx.auditEntry.create({
         data: {
@@ -223,7 +341,7 @@ export class PlotsService {
           action: 'PLOT_LOCK_ACQUIRED',
           entityType: 'lock',
           entityId: plotId,
-          details: `Admin ${session.fullName || session.username} acquired 10m booking lock on ${plot.plotNumber}`,
+          details: `Admin ${session.fullName || session.username} acquired 10m booking lock on ${updatedPlot.plotNumber}`,
           newValue: { lockedBy: session.adminId, lockedAt: now },
         },
       });
@@ -249,7 +367,10 @@ export class PlotsService {
 
     return {
       ok: true,
-      plot: result.updatedPlot,
+      plot: {
+        ...result.updatedPlot,
+        lockedByName: session.fullName || session.username,
+      },
       lockToken,
     };
   }
@@ -369,6 +490,21 @@ export class PlotsService {
         throw new ConflictException({
           error: 'ALREADY_RESERVED',
           message: 'Plot already has an active reservation',
+        });
+      }
+
+      const phoneDigits = dto.customerPhone.replace(/\D/g, '');
+      if (phoneDigits.length > 11) {
+        throw new BadRequestException({
+          error: 'INVALID_PHONE',
+          message: 'Customer phone number cannot be greater than 11 digits.',
+        });
+      }
+
+      if (dto.tokenFee !== undefined && (isNaN(Number(dto.tokenFee)) || Number(dto.tokenFee) <= 0)) {
+        throw new BadRequestException({
+          error: 'INVALID_TOKEN_FEE',
+          message: 'Token fee must be greater than zero.',
         });
       }
 
@@ -556,6 +692,29 @@ export class PlotsService {
           });
         }
       } else if (dto.customer) {
+        if (dto.customer.phone) {
+          const phoneDigits = dto.customer.phone.replace(/\D/g, '');
+          if (phoneDigits.length > 11) {
+            throw new BadRequestException({
+              error: 'INVALID_PHONE',
+              message: 'Customer phone number cannot be greater than 11 digits.',
+            });
+          }
+        }
+        const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+        if (dto.customer.cnic && dto.customer.cnic !== 'Pending' && !cnicRegex.test(dto.customer.cnic)) {
+          throw new BadRequestException({
+            error: 'INVALID_CNIC',
+            message: 'Customer CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+          });
+        }
+        if (dto.customer.nokCnic && !cnicRegex.test(dto.customer.nokCnic)) {
+          throw new BadRequestException({
+            error: 'INVALID_CNIC',
+            message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+          });
+        }
+
         // The same CNIC must not create a second member: check by CNIC first
         const cnicToFind = dto.customer.cnic && dto.customer.cnic !== 'Pending' ? dto.customer.cnic.trim() : null;
         if (cnicToFind) {
@@ -703,12 +862,17 @@ export class PlotsService {
           bookingDate: now,
         });
 
+        const totalRows = planYears * 12;
+        const biannualCount = planYears * 2;
+        const monthlyCount = totalRows - 1 - biannualCount - 1;
+
         installmentPlanData = {
           planYears,
           totalPayment: plotPriceNum,
           downpayment: schedule[0].amount,
-          monthlyInstallmentCount: planYears * 12,
-          biannualInstallmentCount: planYears * 2,
+          monthlyInstallmentCount: monthlyCount,
+          biannualInstallmentCount: biannualCount,
+          numberOfInstallments: monthlyCount + biannualCount,
         };
       }
 
@@ -1037,6 +1201,12 @@ export class PlotsService {
 
       const oldPrice = Number(plot.price);
       const newPrice = Number(dto.price);
+      if (isNaN(newPrice) || newPrice <= 0) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Plot price must be greater than zero.',
+        });
+      }
 
       const updatedPlot = await tx.plot.update({
         where: { id: plotId },
@@ -1050,8 +1220,9 @@ export class PlotsService {
           const plan = booking.installmentPlan as any;
           const planYears = Number(plan.planYears || plan.years || 1);
           const downpayment = Math.floor(newPrice * 0.25);
-          const monthlyCount = planYears * 12;
+          const totalRows = planYears * 12;
           const biannualCount = planYears * 2;
+          const monthlyCount = totalRows - 1 - biannualCount - 1;
           const numberOfInstallments = monthlyCount + biannualCount;
 
           await tx.booking.update({

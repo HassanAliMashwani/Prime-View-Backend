@@ -133,13 +133,17 @@ export class CustomersService {
       bookingDate,
     });
 
+    const totalRows = planYears * 12;
+    const biannualCount = planYears * 2;
+    const monthlyCount = totalRows - 1 - biannualCount - 1;
+
     const installmentPlanData = {
       planYears,
       totalPayment: totalPrice,
       downpayment: schedule[0].amount,
-      monthlyInstallmentCount: planYears * 12,
-      biannualInstallmentCount: planYears * 2,
-      numberOfInstallments: (planYears * 12) + (planYears * 2),
+      monthlyInstallmentCount: monthlyCount,
+      biannualInstallmentCount: biannualCount,
+      numberOfInstallments: monthlyCount + biannualCount,
     };
 
     return {
@@ -398,6 +402,14 @@ export class CustomersService {
 
     const applicantPhoto = customer.documents?.find((d: any) => d.type === 'applicant_photo');
     (customer as any).applicantPhotoUrl = applicantPhoto?.fileUrl || null;
+
+    if (customer.bookings) {
+      customer.bookings.forEach((b: any) => {
+        if (b.plot && b.plot.price !== undefined && b.plot.price !== null) {
+          b.plot.price = Number(b.plot.price);
+        }
+      });
+    }
 
     return customer;
   }
@@ -782,6 +794,26 @@ export class CustomersService {
         error: 'ALREADY_COMPLETE',
         message: 'Customer registration is already complete.',
       });
+    }
+
+    if (dto.phone) {
+      const phoneDigits = dto.phone.replace(/\D/g, '');
+      if (phoneDigits.length > 11) {
+        throw new BadRequestException({
+          error: 'INVALID_PHONE',
+          message: 'Phone number cannot be greater than 11 digits.',
+        });
+      }
+    }
+
+    if (dto.cnic) {
+      const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+      if (!cnicRegex.test(dto.cnic)) {
+        throw new BadRequestException({
+          error: 'INVALID_CNIC',
+          message: 'Customer CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+        });
+      }
     }
 
     if (dto.nokCnic) {
@@ -1236,6 +1268,14 @@ export class CustomersService {
       throw new BadRequestException({
         error: 'INVALID_CNIC',
         message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+      });
+    }
+
+    const phoneDigits = dto.phone.replace(/\D/g, '');
+    if (phoneDigits.length > 11) {
+      throw new BadRequestException({
+        error: 'INVALID_PHONE',
+        message: 'Phone number cannot be greater than 11 digits.',
       });
     }
 
@@ -2207,6 +2247,30 @@ export class CustomersService {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to update this customer profile.',
+      });
+    }
+
+    if (dto.phone) {
+      const phoneDigits = dto.phone.replace(/\D/g, '');
+      if (phoneDigits.length > 11) {
+        throw new BadRequestException({
+          error: 'INVALID_PHONE',
+          message: 'Phone number cannot be greater than 11 digits.',
+        });
+      }
+    }
+
+    const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+    if (dto.cnic && !cnicRegex.test(dto.cnic)) {
+      throw new BadRequestException({
+        error: 'INVALID_CNIC',
+        message: 'Customer CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+      });
+    }
+    if (dto.nokCnic && !cnicRegex.test(dto.nokCnic)) {
+      throw new BadRequestException({
+        error: 'INVALID_CNIC',
+        message: 'Nominee CNIC must be exactly 13 digits in 00000-0000000-0 format.',
       });
     }
 

@@ -32,6 +32,11 @@ export class AdminController {
     return { ok: true, modules: MODULE_REGISTRY };
   }
 
+  @Get('blocks')
+  async getBlocks(@CurrentSession() session: any) {
+    return this.adminService.getBlocks(session);
+  }
+
   @Get('sub-admins')
   async getSubAdmins(@Query() query: any, @CurrentSession() session: any) {
     return this.adminService.getSubAdmins(session, query);

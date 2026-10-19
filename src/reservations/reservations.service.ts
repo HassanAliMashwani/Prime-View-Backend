@@ -62,16 +62,10 @@ export class ReservationsService {
 
       if (session.role !== 'super_admin') {
         const assignedBlocks = session.assignedBlocks || [];
-        const scopeConditions: any[] = [
-          { plot: { blockId: { in: assignedBlocks } } },
-        ];
-        if (session.adminId) scopeConditions.push({ reservedByAdminId: session.adminId });
-        if (session.username) scopeConditions.push({ reservedByAdminId: session.username });
-
-        andConditions.push({ OR: scopeConditions });
-
         if (query.blockId && query.blockId !== 'all') {
           andConditions.push({ plot: { blockId: query.blockId } });
+        } else {
+          andConditions.push({ plot: { blockId: { in: assignedBlocks } } });
         }
       } else {
         if (query.blockId && query.blockId !== 'all') {
