@@ -45,7 +45,15 @@ export class SalesService {
       }
 
       // 2. Build SQL Conditions
-      const conditions = [`a.action = 'PLOT_BOOKED'`];
+      const conditions = [
+        `a.action = 'PLOT_BOOKED'`,
+        `p.id IS NOT NULL`,
+        `(
+          (a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' AND (a."newValue"->>'salePrice')::numeric > 0)
+          OR (bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' AND (bk."installmentPlan"->>'totalPayment')::numeric > 0)
+          OR (p.price IS NOT NULL AND p.price > 0)
+        )`
+      ];
       const params: any[] = [];
       let paramIdx = 1;
 
@@ -127,7 +135,9 @@ export class SalesService {
         conditions.push(`(
           p."plotNumber" ILIKE $${paramIdx} OR
           c."fullName" ILIKE $${paramIdx} OR
-          c."membershipNo" ILIKE $${paramIdx}
+          c."membershipNo" ILIKE $${paramIdx} OR
+          a."newValue"->>'plotNumber' ILIKE $${paramIdx} OR
+          a."newValue"->>'customerName' ILIKE $${paramIdx}
         )`);
         params.push(`%${filters.search}%`);
         paramIdx++;
@@ -153,24 +163,36 @@ export class SalesService {
           a."actorName" as "sellerAdminName",
           a."actorRole" as "sellerAdminRole",
           p.id as "plotId",
-          p."plotNumber",
+          COALESCE(p."plotNumber", a."newValue"->>'plotNumber') as "plotNumber",
           p."blockId",
-          b.name as "blockName",
+          COALESCE(b.name, p."blockId", '—') as "blockName",
           p.category,
           p.size,
-          COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0) as price_num,
-          c.id as "customerId",
-          c."fullName" as "customerName",
-          c."membershipNo",
+          CASE 
+            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
+            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+            WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
+            ELSE 0
+          END as price_num,
+          COALESCE(c.id, a."newValue"->>'customerId') as "customerId",
+          COALESCE(c."fullName", a."newValue"->>'customerName', '—') as "customerName",
+          COALESCE(c."membershipNo", a."newValue"->>'membershipNo', '—') as "membershipNo",
           COALESCE(a."newValue"->>'paymentType', bk."paymentType"::text, 'installment') as "paymentType",
           COALESCE(a."newValue"->>'bookingId', bk.id, a."entityId") as "bookingId",
           COUNT(*) OVER() as "totalCount",
-          SUM(COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0)) OVER() as "totalVolume"
+          SUM(
+            CASE 
+              WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
+              WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+              WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
+              ELSE 0
+            END
+          ) OVER() as "totalVolume"
         FROM "AuditEntry" a
         LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
-        JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', '')::uuid, bk."plotId")
-        JOIN "Block" b ON b.id = p."blockId"
-        JOIN "Customer" c ON c.id = COALESCE(NULLIF(a."newValue"->>'customerId', ''), bk."customerId", p."currentOwnerId")
+        JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', ''), bk."plotId")
+        LEFT JOIN "Block" b ON b.id = p."blockId"
+        LEFT JOIN "Customer" c ON c.id = COALESCE(NULLIF(a."newValue"->>'customerId', ''), bk."customerId", p."currentOwnerId")
         ${whereClause}
         ORDER BY a.timestamp DESC
         LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
@@ -181,30 +203,32 @@ export class SalesService {
       const totalRevenuePkr = rawItems.length > 0 ? Number(rawItems[0].totalVolume || 0) : 0;
 
       // 5. Format Output
-      const items = rawItems.map(row => {
-        const date = new Date(row.timestamp);
-        return {
-          id: row.bookingId || row.auditId,
-          auditId: row.auditId,
-          timestamp: row.timestamp.toISOString(),
-          dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-          timeStr: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-          plotId: row.plotId,
-          plotNumber: row.plotNumber,
-          blockId: row.blockId,
-          blockName: row.blockName,
-          category: row.category,
-          size: row.size,
-          price: Number(row.price_num || 0),
-          customerId: row.customerId,
-          customerName: row.customerName,
-          membershipNo: row.membershipNo || '—',
-          paymentType: row.paymentType,
-          sellerAdminId: row.sellerAdminId,
-          sellerAdminName: row.sellerAdminName,
-          sellerAdminRole: row.sellerAdminRole,
-        };
-      });
+      const items = rawItems
+        .filter(row => row.plotId && typeof Number(row.price_num) === 'number' && !isNaN(Number(row.price_num)) && Number(row.price_num) > 0)
+        .map(row => {
+          const date = new Date(row.timestamp);
+          return {
+            id: row.bookingId || row.auditId,
+            auditId: row.auditId,
+            timestamp: row.timestamp.toISOString(),
+            dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+            timeStr: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+            plotId: row.plotId,
+            plotNumber: row.plotNumber,
+            blockId: row.blockId,
+            blockName: row.blockName,
+            category: row.category,
+            size: row.size,
+            price: Number(row.price_num || 0),
+            customerId: row.customerId,
+            customerName: row.customerName,
+            membershipNo: row.membershipNo || '—',
+            paymentType: row.paymentType,
+            sellerAdminId: row.sellerAdminId,
+            sellerAdminName: row.sellerAdminName,
+            sellerAdminRole: row.sellerAdminRole,
+          };
+        });
 
       const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
 
@@ -255,7 +279,16 @@ export class SalesService {
   }
 
   private async computeTodayStats(session: any, filterAdminId: string | undefined, assignedBlocks: string[] | null) {
-    const conditions = [`a.action = 'PLOT_BOOKED'`, `a.timestamp >= CURRENT_DATE`];
+    const conditions = [
+      `a.action = 'PLOT_BOOKED'`,
+      `a.timestamp >= CURRENT_DATE`,
+      `p.id IS NOT NULL`,
+      `(
+        (a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' AND (a."newValue"->>'salePrice')::numeric > 0)
+        OR (bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' AND (bk."installmentPlan"->>'totalPayment')::numeric > 0)
+        OR (p.price IS NOT NULL AND p.price > 0)
+      )`
+    ];
     const params: any[] = [];
     let paramIdx = 1;
 
@@ -281,10 +314,17 @@ export class SalesService {
     const query = `
       SELECT 
         COUNT(*) as "todayPlotsSold",
-        COALESCE(SUM(COALESCE(NULLIF(a."newValue"->>'salePrice', '')::numeric, (bk."installmentPlan"->>'totalPayment')::numeric, p.price, 0)), 0) as "todayRevenuePkr"
+        COALESCE(SUM(
+          CASE 
+            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
+            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+            WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
+            ELSE 0
+          END
+        ), 0) as "todayRevenuePkr"
       FROM "AuditEntry" a
       LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
-      JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', '')::uuid, bk."plotId")
+      JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', ''), bk."plotId")
       ${whereClause}
     `;
     const res = await this.prisma.$queryRawUnsafe<any[]>(query, ...params);
