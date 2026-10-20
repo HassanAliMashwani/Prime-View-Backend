@@ -1,6 +1,6 @@
 import { Injectable, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { PlotCategory } from '@prisma/client';
+import { PlotCategory, Prisma } from '@prisma/client';
 
 export interface SalesHistoryFilters {
   datePreset?: 'today' | 'yesterday' | 'last_7_days' | 'last_30_days' | 'this_month' | 'all';
@@ -38,7 +38,7 @@ export class SalesService {
         assignedBlocks = session.assignedBlocks || [];
       }
 
-      if (assignedBlocks !== null && filters.blockId) {
+      if (assignedBlocks !== null && filters.blockId && filters.blockId !== 'all') {
         if (!assignedBlocks.includes(filters.blockId)) {
           return this.emptyResult();
         }
@@ -169,8 +169,8 @@ export class SalesService {
           p.category,
           p.size,
           CASE 
-            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
-            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' AND (a."newValue"->>'salePrice')::numeric > 0 THEN (a."newValue"->>'salePrice')::numeric
+            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' AND (bk."installmentPlan"->>'totalPayment')::numeric > 0 THEN (bk."installmentPlan"->>'totalPayment')::numeric
             WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
             ELSE 0
           END as price_num,
@@ -182,14 +182,14 @@ export class SalesService {
           COUNT(*) OVER() as "totalCount",
           SUM(
             CASE 
-              WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
-              WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+              WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' AND (a."newValue"->>'salePrice')::numeric > 0 THEN (a."newValue"->>'salePrice')::numeric
+              WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' AND (bk."installmentPlan"->>'totalPayment')::numeric > 0 THEN (bk."installmentPlan"->>'totalPayment')::numeric
               WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
               ELSE 0
             END
           ) OVER() as "totalVolume"
         FROM "AuditEntry" a
-        LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
+        LEFT JOIN "Booking" bk ON bk.id = COALESCE(NULLIF(a."newValue"->>'bookingId', ''), a."entityId")
         JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', ''), bk."plotId")
         LEFT JOIN "Block" b ON b.id = p."blockId"
         LEFT JOIN "Customer" c ON c.id = COALESCE(NULLIF(a."newValue"->>'customerId', ''), bk."customerId", p."currentOwnerId")
@@ -198,58 +198,60 @@ export class SalesService {
         LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
       `;
 
-      const rawItems = await this.prisma.$queryRawUnsafe<any[]>(itemsQuery, ...params);
-      const total = rawItems.length > 0 ? Number(rawItems[0].totalCount || 0) : 0;
-      const totalRevenuePkr = rawItems.length > 0 ? Number(rawItems[0].totalVolume || 0) : 0;
+      return await this.prisma.withScopedSession(session, async (tx) => {
+        const rawItems = await tx.$queryRawUnsafe<any[]>(itemsQuery, ...params);
+        const total = rawItems.length > 0 ? Number(rawItems[0].totalCount || 0) : 0;
+        const totalRevenuePkr = rawItems.length > 0 ? Number(rawItems[0].totalVolume || 0) : 0;
 
-      // 5. Format Output
-      const items = rawItems
-        .filter(row => row.plotId && typeof Number(row.price_num) === 'number' && !isNaN(Number(row.price_num)) && Number(row.price_num) > 0)
-        .map(row => {
-          const date = new Date(row.timestamp);
-          return {
-            id: row.bookingId || row.auditId,
-            auditId: row.auditId,
-            timestamp: row.timestamp.toISOString(),
-            dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-            timeStr: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
-            plotId: row.plotId,
-            plotNumber: row.plotNumber,
-            blockId: row.blockId,
-            blockName: row.blockName,
-            category: row.category,
-            size: row.size,
-            price: Number(row.price_num || 0),
-            customerId: row.customerId,
-            customerName: row.customerName,
-            membershipNo: row.membershipNo || '—',
-            paymentType: row.paymentType,
-            sellerAdminId: row.sellerAdminId,
-            sellerAdminName: row.sellerAdminName,
-            sellerAdminRole: row.sellerAdminRole,
-          };
-        });
+        // 5. Format Output
+        const items = rawItems
+          .filter(row => row.plotId && typeof Number(row.price_num) === 'number' && !isNaN(Number(row.price_num)) && Number(row.price_num) > 0)
+          .map(row => {
+            const date = new Date(row.timestamp);
+            return {
+              id: row.bookingId || row.auditId,
+              auditId: row.auditId,
+              timestamp: row.timestamp.toISOString(),
+              dateStr: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+              timeStr: date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+              plotId: row.plotId,
+              plotNumber: row.plotNumber,
+              blockId: row.blockId,
+              blockName: row.blockName,
+              category: row.category,
+              size: row.size,
+              price: Number(row.price_num || 0),
+              customerId: row.customerId,
+              customerName: row.customerName,
+              membershipNo: row.membershipNo || '—',
+              paymentType: row.paymentType,
+              sellerAdminId: row.sellerAdminId,
+              sellerAdminName: row.sellerAdminName,
+              sellerAdminRole: row.sellerAdminRole,
+            };
+          });
 
-      const todayStats = await this.computeTodayStats(session, filters.adminId, assignedBlocks);
+        const todayStats = await this.computeTodayStats(tx, session, filters.adminId, assignedBlocks);
 
-      return {
-        ok: true,
-        items,
-        total,
-        page,
-        pageSize,
-        kpis: {
-          totalPlotsSold: total,
-          totalRevenuePkr,
-          todayPlotsSold: todayStats.todayPlotsSold,
-          todayRevenuePkr: todayStats.todayRevenuePkr,
-          topCloser: null,
-          salesByCategory: {},
-        }
-      };
+        return {
+          ok: true,
+          items,
+          total,
+          page,
+          pageSize,
+          kpis: {
+            totalPlotsSold: total,
+            totalRevenuePkr,
+            todayPlotsSold: todayStats.todayPlotsSold,
+            todayRevenuePkr: todayStats.todayRevenuePkr,
+            topCloser: null,
+            salesByCategory: {},
+          }
+        };
+      });
 
     } catch (error) {
-      this.logger.error('Sales history query failed');
+      this.logger.error('Sales history query failed', error instanceof Error ? error.stack : error);
       if (error instanceof ForbiddenException) {
         throw error; // Let nest handle 403
       }
@@ -258,7 +260,7 @@ export class SalesService {
         items: [],
         kpis: this.emptyResult().kpis,
         error: 'INTERNAL_SERVER_ERROR',
-        message: 'An error occurred while fetching sales history.',
+        message: 'Sales history failed to load.',
       };
     }
   }
@@ -278,7 +280,12 @@ export class SalesService {
     };
   }
 
-  private async computeTodayStats(session: any, filterAdminId: string | undefined, assignedBlocks: string[] | null) {
+  private async computeTodayStats(
+    tx: Prisma.TransactionClient,
+    session: any,
+    filterAdminId: string | undefined,
+    assignedBlocks: string[] | null
+  ) {
     const conditions = [
       `a.action = 'PLOT_BOOKED'`,
       `a.timestamp >= CURRENT_DATE`,
@@ -316,18 +323,18 @@ export class SalesService {
         COUNT(*) as "todayPlotsSold",
         COALESCE(SUM(
           CASE 
-            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (a."newValue"->>'salePrice')::numeric
-            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' THEN (bk."installmentPlan"->>'totalPayment')::numeric
+            WHEN a."newValue"->>'salePrice' ~ '^[0-9]+(\\.[0-9]+)?$' AND (a."newValue"->>'salePrice')::numeric > 0 THEN (a."newValue"->>'salePrice')::numeric
+            WHEN bk."installmentPlan"->>'totalPayment' ~ '^[0-9]+(\\.[0-9]+)?$' AND (bk."installmentPlan"->>'totalPayment')::numeric > 0 THEN (bk."installmentPlan"->>'totalPayment')::numeric
             WHEN p.price IS NOT NULL AND p.price > 0 THEN p.price
             ELSE 0
           END
         ), 0) as "todayRevenuePkr"
       FROM "AuditEntry" a
-      LEFT JOIN "Booking" bk ON bk.id = (a."newValue"->>'bookingId') OR bk.id = a."entityId"
+      LEFT JOIN "Booking" bk ON bk.id = COALESCE(NULLIF(a."newValue"->>'bookingId', ''), a."entityId")
       JOIN "Plot" p ON p.id = COALESCE(NULLIF(a."newValue"->>'plotId', ''), bk."plotId")
       ${whereClause}
     `;
-    const res = await this.prisma.$queryRawUnsafe<any[]>(query, ...params);
+    const res = await tx.$queryRawUnsafe<any[]>(query, ...params);
     if (res.length > 0) {
       return {
         todayPlotsSold: Number(res[0].todayPlotsSold || 0),
