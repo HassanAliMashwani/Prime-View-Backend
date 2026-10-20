@@ -161,6 +161,8 @@ model Plot {
   @@unique([blockId, plotNumber])
   @@index([blockId, status])
   @@index([status])
+  @@index([plotNumber])
+  @@index([blockId])
 }
 
 model PlotStatusHistory {
@@ -238,6 +240,7 @@ model Customer {
   receipts            ReceiptSubmission[]
 
   @@index([cnic])
+  @@index([fullName])
 }
 
 model CustomerStrike {
@@ -295,6 +298,7 @@ model Booking {
   societyDocuments    SocietyDocument[]
 
   @@index([customerId])
+  @@index([bookingDate])
 }
 
 model PaymentRecord {

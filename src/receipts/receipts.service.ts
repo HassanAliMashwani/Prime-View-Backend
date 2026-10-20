@@ -587,46 +587,49 @@ export class ReceiptsService {
 
     let total = 0;
     const enriched = await this.prisma.withScopedSession(session, async (tx) => {
-      total = await tx.receiptSubmission.count({ where });
-      const receipts = await tx.receiptSubmission.findMany({
-        where,
-        skip,
-        take,
-        select: {
-          id: true,
-          customerId: true,
-          bookingId: true,
-          paymentRecordId: true,
-          depositoryBank: true,
-          transactionRef: true,
-          paymentDate: true,
-          amount: true,
-          paymentKind: true,
-          status: true,
-          verifiedByAdminId: true,
-          verifiedAt: true,
-          rejectionReason: true,
-          slipNumber: true,
-          slipNumberFormatVersion: true,
-          verificationToken: true,
-          qrTarget: true,
-          securityHash: true,
-          uploadedAt: true,
-          issuedByNameSnapshot: true,
-          customer: {
-            select: {
-              id: true,
-              fullName: true,
-              membershipNo: true,
-              phone: true,
-              cnic: true,
-              strikeCount: true,
-              fatherOrHusbandName: true,
+      const [totalCount, receipts] = await Promise.all([
+        tx.receiptSubmission.count({ where }),
+        tx.receiptSubmission.findMany({
+          where,
+          skip,
+          take,
+          select: {
+            id: true,
+            customerId: true,
+            bookingId: true,
+            paymentRecordId: true,
+            depositoryBank: true,
+            transactionRef: true,
+            paymentDate: true,
+            amount: true,
+            paymentKind: true,
+            status: true,
+            verifiedByAdminId: true,
+            verifiedAt: true,
+            rejectionReason: true,
+            slipNumber: true,
+            slipNumberFormatVersion: true,
+            verificationToken: true,
+            qrTarget: true,
+            securityHash: true,
+            uploadedAt: true,
+            issuedByNameSnapshot: true,
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                membershipNo: true,
+                phone: true,
+                cnic: true,
+                strikeCount: true,
+                fatherOrHusbandName: true,
+              },
             },
           },
-        },
-        orderBy: { uploadedAt: 'desc' },
-      });
+          orderBy: { uploadedAt: 'desc' },
+        }),
+      ]);
+      total = totalCount;
 
       const adminIds = [...new Set(receipts.map((r) => r.verifiedByAdminId).filter(Boolean))] as string[];
       let adminMap = new Map<string, { fullName: string; username: string }>();

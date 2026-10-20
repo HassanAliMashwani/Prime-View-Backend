@@ -188,6 +188,7 @@ export class CustomersService {
     if (query.search) {
       const s = query.search;
       whereClause.OR = [
+        { id: s },
         { fullName: { contains: s, mode: 'insensitive' } },
         { membershipNo: { contains: s, mode: 'insensitive' } },
         { cnic: { contains: s, mode: 'insensitive' } },
@@ -202,13 +203,13 @@ export class CustomersService {
     const skip = (page - 1) * pageSize;
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      const total = await tx.customer.count({ where: whereClause });
-
-      const customers = await tx.customer.findMany({
-        where: whereClause,
-        skip,
-        take: pageSize,
-        select: {
+      const [total, customers] = await Promise.all([
+        tx.customer.count({ where: whereClause }),
+        tx.customer.findMany({
+          where: whereClause,
+          skip,
+          take: pageSize,
+          select: {
           id: true,
           membershipNo: true,
           fullName: true,
@@ -247,7 +248,19 @@ export class CustomersService {
               installmentPlan: true,
               paperInstallmentRef: true,
               plot: {
-                select: { id: true, blockId: true, plotNumber: true, size: true, price: true, category: true }
+                select: {
+                  id: true,
+                  blockId: true,
+                  plotNumber: true,
+                  size: true,
+                  price: true,
+                  category: true,
+                  block: {
+                    select: {
+                      name: true,
+                    },
+                  },
+                },
               },
               payments: {
                 where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'] } },
@@ -257,7 +270,8 @@ export class CustomersService {
           }
         },
         orderBy: { createdDate: 'desc' },
-      });
+      }),
+    ]);
 
       const formattedCustomers = customers.map(c => {
         let plotCount = 0;
@@ -268,7 +282,7 @@ export class CustomersService {
         const plots: any[] = [];
 
         c.bookings.forEach(b => {
-          if (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId))) {
+          if (b.plot && (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId)))) {
             plotCount++;
             const billsCount = b.payments
               ? b.payments.filter((p: any) =>
@@ -284,7 +298,7 @@ export class CustomersService {
               bookingId: b.id,
               blockId: b.plot.blockId,
               block: b.plot.blockId,
-              blockName: b.plot.blockId,
+              blockName: b.plot.block?.name || b.plot.blockId,
               plotNumber: b.plot.plotNumber,
               size: b.plot.size || '',
               category: b.plot.category || 'residential',
@@ -483,12 +497,14 @@ export class CustomersService {
           registrationStatus: true,
           bookings: {
             where: {
+              status: { notIn: ['cancelled', 'released', 'void'] },
               plot: {
                 status: { in: [PlotStatus.booked, PlotStatus.allotted] },
               },
             },
             select: {
               plotId: true,
+              status: true,
               plot: {
                 select: {
                   id: true,

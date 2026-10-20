@@ -78,15 +78,40 @@ export class ReservationsService {
       const [items, total] = await Promise.all([
         tx.reservation.findMany({
           where,
-          include: { 
+          select: {
+            id: true,
+            plotId: true,
+            customerName: true,
+            customerPhone: true,
+            customerEmail: true,
+            tokenFee: true,
+            validUntil: true,
+            reservedByAdminId: true,
+            reservedByAdminName: true,
+            status: true,
+            createdAt: true,
+            confirmedAt: true,
+            confirmedByBookingId: true,
+            supersededAt: true,
+            supersededByBookingId: true,
+            cancelledAt: true,
+            cancelledByAdminId: true,
+            resolutionNote: true,
             plot: {
-              include: {
+              select: {
+                id: true,
+                plotNumber: true,
+                blockId: true,
+                category: true,
+                size: true,
+                price: true,
+                status: true,
                 reservations: {
                   where: { status: 'active' },
-                  select: { id: true }
-                }
-              }
-            }
+                  select: { id: true },
+                },
+              },
+            },
           },
           orderBy: { createdAt: 'desc' },
           skip,

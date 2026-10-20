@@ -68,24 +68,27 @@ export class AdminService {
 
     let totalCount = 0;
     const logs = await this.prisma.withScopedSession(session, async (tx) => {
-      totalCount = await tx.auditEntry.count({ where });
-      const entries = await tx.auditEntry.findMany({
-        where,
-        skip,
-        take,
-        orderBy: { timestamp: 'desc' },
-        select: {
-          id: true,
-          timestamp: true,
-          actorId: true,
-          actorName: true,
-          actorRole: true,
-          action: true,
-          entityType: true,
-          entityId: true,
-          details: true,
-        },
-      });
+      const [cnt, entries] = await Promise.all([
+        tx.auditEntry.count({ where }),
+        tx.auditEntry.findMany({
+          where,
+          skip,
+          take,
+          orderBy: { timestamp: 'desc' },
+          select: {
+            id: true,
+            timestamp: true,
+            actorId: true,
+            actorName: true,
+            actorRole: true,
+            action: true,
+            entityType: true,
+            entityId: true,
+            details: true,
+          },
+        }),
+      ]);
+      totalCount = cnt;
 
       const entryIds = entries.map((e) => e.id);
       let diffMap = new Map<string, boolean>();

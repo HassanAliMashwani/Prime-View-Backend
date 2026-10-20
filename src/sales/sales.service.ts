@@ -68,15 +68,61 @@ export class SalesService {
       }
 
       return await this.prisma.withScopedSession(session, async (tx) => {
-        // 2. Fetch all admin users to resolve officer names
-        const adminUsers = await tx.adminUser.findMany({
-          select: {
-            id: true,
-            username: true,
-            fullName: true,
-            role: true,
-          },
-        });
+        // 2 & 3. Fetch admin users to resolve officer names and query live Booking rows in parallel
+        const [adminUsers, rawBookings] = await Promise.all([
+          tx.adminUser.findMany({
+            select: {
+              id: true,
+              username: true,
+              fullName: true,
+              role: true,
+            },
+          }),
+          tx.booking.findMany({
+            where: {
+              plot: {
+                status: { in: [PlotStatus.booked, PlotStatus.allotted] },
+              },
+              customer: {
+                id: { not: '' },
+              },
+            },
+            select: {
+              id: true,
+              bookingDate: true,
+              plotId: true,
+              paymentType: true,
+              installmentPlan: true,
+              createdByAdminId: true,
+              plot: {
+                select: {
+                  id: true,
+                  plotNumber: true,
+                  blockId: true,
+                  category: true,
+                  size: true,
+                  price: true,
+                  block: {
+                    select: {
+                      name: true,
+                    },
+                  },
+                },
+              },
+              customer: {
+                select: {
+                  id: true,
+                  fullName: true,
+                  membershipNo: true,
+                  registrationStatus: true,
+                },
+              },
+            },
+            orderBy: {
+              bookingDate: 'desc',
+            },
+          }),
+        ]);
 
         const adminMap = new Map<string, { id: string; username: string; fullName: string; role: 'super_admin' | 'sub_admin' }>();
         for (const u of adminUsers) {
@@ -86,36 +132,12 @@ export class SalesService {
           adminMap.set(u.username, info);
         }
 
-        // 3. Query live Booking rows joined to Plot and Customer
-        // Include only when plot status is booked or allotted and booking still belongs to a customer in the customer directory
-        const rawBookings = await tx.booking.findMany({
-          where: {
-            plot: {
-              status: { in: [PlotStatus.booked, PlotStatus.allotted] },
-            },
-            customer: {
-              id: { not: '' },
-            },
-          },
-          include: {
-            plot: {
-              include: {
-                block: true,
-              },
-            },
-            customer: true,
-          },
-          orderBy: {
-            bookingDate: 'desc',
-          },
-        });
-
         // 4. One row per plot — deduplicate by plotId taking the latest booking
         const seenPlots = new Set<string>();
         const uniquePlotBookings: typeof rawBookings = [];
 
         for (const b of rawBookings) {
-          if (!seenPlots.has(b.plotId)) {
+          if (b.plot && b.customer && !seenPlots.has(b.plotId)) {
             seenPlots.add(b.plotId);
             uniquePlotBookings.push(b);
           }
