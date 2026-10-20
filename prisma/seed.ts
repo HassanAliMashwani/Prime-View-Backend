@@ -98,27 +98,39 @@ async function main() {
     });
   }
 
-  // 4. Create Plots
-  for (const plot of initialPlots) {
-    await prisma.plot.create({
-      data: {
-        id: plot.id,
-        blockId: plot.blockId,
-        plotNumber: plot.plotNumber,
-        plotType: plot.plotType,
-        category: plot.category as any,
-        amenityName: plot.amenityName,
-        size: plot.size,
-        price: plot.price,
-        status: plot.status as any,
-        isAdjustment: plot.isAdjustment || false,
-        adjustmentReason: plot.adjustmentReason,
-        adjustmentDate: plot.adjustmentDate ? new Date(plot.adjustmentDate) : null,
-        adjustmentBy: plot.adjustmentBy,
-        currentOwnerId: plot.currentOwnerId,
-        version: 0,
-      }
-    });
+  // 4. Create Plots (Must not run against the live database)
+  const existingPlotCount = await prisma.plot.count();
+  const dbUrl = process.env.DIRECT_URL || process.env.DATABASE_URL || '';
+  const isLiveDb =
+    process.env.NODE_ENV === 'production' ||
+    dbUrl.includes('supabase.co') ||
+    dbUrl.includes('pooler.supabase.com') ||
+    (!dbUrl.includes('localhost') && !dbUrl.includes('127.0.0.1') && dbUrl.length > 0);
+
+  if (isLiveDb || existingPlotCount > 0) {
+    console.log(`[GUARD] Plot create must not run against the live database (found ${existingPlotCount} plots in database, isLiveDb=${isLiveDb}). Plot creation skipped.`);
+  } else {
+    for (const plot of initialPlots) {
+      await prisma.plot.create({
+        data: {
+          id: plot.id,
+          blockId: plot.blockId,
+          plotNumber: plot.plotNumber,
+          plotType: plot.plotType,
+          category: plot.category as any,
+          amenityName: plot.amenityName,
+          size: plot.size,
+          price: plot.price,
+          status: plot.status as any,
+          isAdjustment: plot.isAdjustment || false,
+          adjustmentReason: plot.adjustmentReason,
+          adjustmentDate: plot.adjustmentDate ? new Date(plot.adjustmentDate) : null,
+          adjustmentBy: plot.adjustmentBy,
+          currentOwnerId: plot.currentOwnerId,
+          version: 0,
+        }
+      });
+    }
   }
 
   // 5. Create Bookings

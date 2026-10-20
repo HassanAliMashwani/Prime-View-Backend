@@ -82,26 +82,9 @@ async function main() {
       size = 'Various';
     }
 
-    if (!existingByNumber.has(plotNumber)) {
-      await prisma.plot.create({
-        data: {
-          id: `plot-npf1-${plotNumber}`,
-          blockId: 'npf-phase-1',
-          plotNumber,
-          plotType: 'standard',
-          category,
-          amenityName,
-          size,
-          price,
-          status: 'available',
-          isAdjustment: false,
-          version: 0
-        }
-      });
-      console.log(`Created ${plotNumber} (${category})`);
-    } else {
+    if (existingByNumber.has(plotNumber)) {
       const existing = existingByNumber.get(plotNumber)!;
-      // "Fix plotNumber / category / amenityName only when status is available and there is no live booking."
+      // Fix category / amenityName / size only when status is available and there is no live booking.
       if (existing.status === 'available') {
         const hasBooking = await prisma.booking.findFirst({ where: { plotId: existing.id } });
         if (!hasBooking) {
@@ -110,21 +93,6 @@ async function main() {
             data: { category, amenityName, size }
           });
           console.log(`Updated existing ${plotNumber}`);
-        }
-      }
-    }
-  }
-
-  // Delete the 6 placeholders if they are available and unbooked
-  const placeholders = ['NPF1-01', 'NPF1-02', 'NPF1-03', 'NPF1-04', 'AMN-P03', 'AMN-S01'];
-  for (const p of placeholders) {
-    if (existingByNumber.has(p)) {
-      const existing = existingByNumber.get(p)!;
-      if (existing.status === 'available') {
-        const hasBooking = await prisma.booking.findFirst({ where: { plotId: existing.id } });
-        if (!hasBooking) {
-          await prisma.plot.delete({ where: { id: existing.id } });
-          console.log(`Deleted placeholder ${p}`);
         }
       }
     }

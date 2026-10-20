@@ -13,6 +13,7 @@ import { ReservePlotDto } from './dto/reserve-plot.dto';
 import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
 import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
+import { AcquireLockDto } from './dto/acquire-lock.dto';
 import { GeneratedDocType, PaymentType, FeeType, PaymentStatus, ReservationStatus, PlotStatus, Prisma } from '@prisma/client';
 
 import { attachDisplayStatus } from './display-status';
@@ -127,34 +128,19 @@ export class PlotsService {
           id: true,
           status: true,
           lockedBy: true,
+          lockedByName: true,
           lockedAt: true,
+          lockReason: true,
           isAdjustment: true,
         },
       });
 
-      const activeLockedByIds = [
-        ...new Set(
-          plots
-            .filter((p) => p.lockedBy && p.lockedAt && p.lockedAt >= expiryThreshold)
-            .map((p) => p.lockedBy)
-            .filter(Boolean)
-        ),
-      ] as string[];
-
-      let adminMap = new Map<string, string>();
-      if (activeLockedByIds.length > 0) {
-        const admins = await tx.adminUser.findMany({
-          where: { id: { in: activeLockedByIds } },
-          select: { id: true, fullName: true, username: true },
-        });
-        admins.forEach((a) => adminMap.set(a.id, a.fullName || a.username));
-      }
-
       return plots.map((p) => {
         const isLockActive = Boolean(p.lockedBy && p.lockedAt && p.lockedAt >= expiryThreshold);
         const lockedBy = isLockActive ? p.lockedBy : null;
-        const lockedByName = lockedBy ? (adminMap.get(lockedBy) || 'Admin') : null;
+        const lockedByName = isLockActive ? (p.lockedByName || 'Admin') : null;
         const lockedAt = isLockActive && p.lockedAt ? p.lockedAt.toISOString() : null;
+        const lockReason = isLockActive ? p.lockReason : null;
 
         return {
           id: p.id,
@@ -163,6 +149,7 @@ export class PlotsService {
           lockedBy,
           lockedByName,
           lockedAt,
+          lockReason,
         };
       });
     });
@@ -252,8 +239,16 @@ export class PlotsService {
   /**
    * Acquire a 10-minute soft lock on a plot (Layer 1 Soft Lock)
    */
-  async acquireLock(plotId: string, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_reserve && !session.permissions?.can_book) {
+  async acquireLock(plotId: string, dto: AcquireLockDto, session: any) {
+    const reason = dto?.reason || 'book';
+    if (reason === 'adjust') {
+      if (session.role !== 'super_admin') {
+        throw new ForbiddenException({
+          error: 'FORBIDDEN',
+          message: 'Only Super Admin can lock plots for Town Planning adjustment',
+        });
+      }
+    } else if (session.role !== 'super_admin' && !session.permissions?.can_reserve && !session.permissions?.can_book) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to lock plots for booking or reservation',
@@ -264,6 +259,7 @@ export class PlotsService {
 
     const now = new Date();
     const lockExpiryWindowMs = 10 * 60 * 1000;
+    const officerName = session.fullName || session.username || 'Admin';
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
       const expiryThreshold = new Date(now.getTime() - lockExpiryWindowMs);
@@ -282,7 +278,9 @@ export class PlotsService {
         },
         data: {
           lockedBy: session.adminId,
+          lockedByName: officerName,
           lockedAt: now,
+          lockReason: reason,
         },
       });
 
@@ -311,23 +309,14 @@ export class PlotsService {
           });
         }
 
-        let lockedByName = 'Another Administrator';
-        if (currentPlot.lockedBy) {
-          const lockingAdmin = await tx.adminUser.findUnique({
-            where: { id: currentPlot.lockedBy },
-            select: { fullName: true, username: true },
-          });
-          if (lockingAdmin) {
-            lockedByName = lockingAdmin.fullName || lockingAdmin.username;
-          }
-        }
-
+        const holderName = currentPlot.lockedByName || 'Another Administrator';
         throw new ConflictException({
           error: 'LOCKED_BY_ANOTHER',
-          message: `Plot is currently locked by ${lockedByName}`,
+          message: `Plot is currently locked by ${holderName}`,
           lockedBy: currentPlot.lockedBy,
-          lockedByName,
+          lockedByName: holderName,
           lockedAt: currentPlot.lockedAt,
+          lockReason: currentPlot.lockReason,
         });
       }
 
@@ -336,13 +325,13 @@ export class PlotsService {
       const audit = await tx.auditEntry.create({
         data: {
           actorId: session.adminId || session.username,
-          actorName: session.fullName || session.username,
+          actorName: officerName,
           actorRole: session.role,
           action: 'PLOT_LOCK_ACQUIRED',
           entityType: 'lock',
           entityId: plotId,
-          details: `Admin ${session.fullName || session.username} acquired 10m booking lock on ${updatedPlot.plotNumber}`,
-          newValue: { lockedBy: session.adminId, lockedAt: now },
+          details: `Admin ${officerName} acquired 10m ${reason} lock on ${updatedPlot.plotNumber}`,
+          newValue: { lockedBy: session.adminId, lockedByName: officerName, lockedAt: now, lockReason: reason },
         },
       });
 
@@ -351,25 +340,25 @@ export class PlotsService {
 
     const lockToken = `lock-${plotId}-${session.adminId}-${now.getTime()}`;
 
-    // Publish Supabase Realtime broadcast
-    await this.realtime.broadcast(`block:${result.updatedPlot.blockId}`, 'PLOT_LOCKED', {
-      plotId,
+    // Non-blocking notice push
+    void this.realtime.broadcast(`block:${result.updatedPlot.blockId}`, 'PLOT_LOCKED', {
+      plotId: result.updatedPlot.id,
+      blockId: result.updatedPlot.blockId,
+      lockReason: reason,
       lockedBy: session.adminId,
-      lockedByName: session.fullName || session.username,
-      lockedAt: now.getTime(),
-    });
-    await this.realtime.broadcast('plots', 'PLOT_LOCKED', {
-      plotId,
-      lockedBy: session.adminId,
-      lockedByName: session.fullName || session.username,
-      lockedAt: now.getTime(),
+      lockedByName: officerName,
+      lockedAt: now.toISOString(),
+      status: result.updatedPlot.status,
     });
 
     return {
       ok: true,
       plot: {
         ...result.updatedPlot,
-        lockedByName: session.fullName || session.username,
+        lockedByName: officerName,
+        lockedBy: session.adminId,
+        lockedAt: now.toISOString(),
+        lockReason: reason,
       },
       lockToken,
     };
@@ -398,7 +387,9 @@ export class PlotsService {
         where: { id: plotId },
         data: {
           lockedBy: null,
+          lockedByName: null,
           lockedAt: null,
+          lockReason: null,
         },
       });
 
@@ -417,16 +408,17 @@ export class PlotsService {
       return updatedPlot;
     });
 
-    await this.realtime.broadcast(`block:${result.blockId}`, 'PLOT_UNLOCKED', {
-      plotId,
-      reason: 'MANUAL_RELEASE',
-    });
-    await this.realtime.broadcast('plots', 'PLOT_UNLOCKED', {
-      plotId,
-      reason: 'MANUAL_RELEASE',
+    void this.realtime.broadcast(`block:${result.blockId}`, 'PLOT_UNLOCKED', {
+      plotId: result.id,
+      blockId: result.blockId,
+      lockReason: null,
+      lockedBy: null,
+      lockedByName: null,
+      lockedAt: null,
+      status: result.status,
     });
 
-    return { ok: true };
+    return { ok: true, plot: result };
   }
 
   /**
@@ -542,7 +534,9 @@ export class PlotsService {
         source: 'reserve',
         plotData: {
           lockedBy: null,
+          lockedByName: null,
           lockedAt: null,
+          lockReason: null,
         },
       });
 
@@ -550,7 +544,9 @@ export class PlotsService {
         ...plot,
         status: PlotStatus.reserved,
         lockedBy: null,
+        lockedByName: null,
         lockedAt: null,
+        lockReason: null,
       };
 
       // 3. Create Reservation record (allows multi-reservation queue per Doc 02 §4)
@@ -588,13 +584,14 @@ export class PlotsService {
       return { updatedPlot, reservation };
     });
 
-    await this.realtime.broadcast(`block:${result.updatedPlot.blockId}`, 'PLOT_RESERVED', {
+    void this.realtime.broadcast(`block:${result.updatedPlot.blockId}`, 'PLOT_RESERVED', {
       plotId: result.updatedPlot.id,
-      reservationId: result.reservation.id,
-    });
-    await this.realtime.broadcast('plots', 'PLOT_RESERVED', {
-      plotId: result.updatedPlot.id,
-      reservationId: result.reservation.id,
+      blockId: result.updatedPlot.blockId,
+      lockReason: null,
+      lockedBy: null,
+      lockedByName: null,
+      lockedAt: null,
+      status: 'reserved',
     });
 
     return {
@@ -826,7 +823,9 @@ export class PlotsService {
         plotData: {
           currentOwnerId: customer.id,
           lockedBy: null,
+          lockedByName: null,
           lockedAt: null,
+          lockReason: null,
         },
       });
 
@@ -835,7 +834,9 @@ export class PlotsService {
         status: targetPlotStatus,
         currentOwnerId: customer.id,
         lockedBy: null,
+        lockedByName: null,
         lockedAt: null,
+        lockReason: null,
       };
 
       // 4. Compute Installment Plan & Validation
@@ -1021,22 +1022,15 @@ export class PlotsService {
       };
     });
 
-    // Realtime Broadcasts in parallel (non-blocking)
-    Promise.all([
-      this.realtime.broadcast(`block:${result.plot.blockId}`, 'PLOT_BOOKED', {
-        plotId: result.plot.id,
-        bookingId: result.booking.id,
-        customerId: result.customer.id,
-        bookedBy: session.adminId,
-      }),
-      this.realtime.broadcast('plots', 'PLOT_BOOKED', {
-        plotId: result.plot.id,
-        bookingId: result.booking.id,
-        customerId: result.customer.id,
-        bookedBy: session.adminId,
-      }),
-    ]).catch((err) => {
-      this.logger.warn(`Failed to dispatch realtime broadcasts: ${err.message}`);
+    // Realtime Broadcast (non-blocking)
+    void this.realtime.broadcast(`block:${result.plot.blockId}`, 'PLOT_BOOKED', {
+      plotId: result.plot.id,
+      blockId: result.plot.blockId,
+      lockReason: null,
+      lockedBy: null,
+      lockedByName: null,
+      lockedAt: null,
+      status: 'booked',
     });
 
     this.logger.log(`[bookPlot:${plotId}] Transaction completed and committed in ${Date.now() - t0}ms (booking: ${result.booking.id})`);
@@ -1112,19 +1106,14 @@ export class PlotsService {
       return updatedPlot;
     });
 
-    await this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_ADJUSTMENT_TOGGLED', {
+    void this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_ADJUSTMENT_TOGGLED', {
       plotId: plot.id,
-      isAdjustment: dto.isAdjustment,
-      reason: result.adjustmentReason,
-    });
-    await this.realtime.broadcast('plots', 'PLOT_ADJUSTMENT_TOGGLED', {
-      plotId: plot.id,
-      isAdjustment: dto.isAdjustment,
-      reason: result.adjustmentReason,
-    });
-    await this.realtime.broadcast('plots', 'PLOT_STATUS_CHANGED', {
-      plotId: plot.id,
-      newStatus: result.status,
+      blockId: plot.blockId,
+      lockReason: dto.isAdjustment ? 'adjust' : null,
+      lockedBy: null,
+      lockedByName: null,
+      lockedAt: null,
+      status: result.status,
     });
 
     return {

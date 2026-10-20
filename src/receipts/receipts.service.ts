@@ -1533,6 +1533,11 @@ export class ReceiptsService {
           promotedPlotNumber = booking.plot.plotNumber;
           promotedBlockId = booking.plot.blockId;
 
+          const promoDetails =
+            booking.paymentType === 'one_time'
+              ? `Plot ${booking.plot.plotNumber} auto-promoted from booked to allotted — full payment cleared via receipt ${receiptId} (${slipNumber})`
+              : `Plot ${booking.plot.plotNumber} auto-promoted from booked to allotted — all installment and possession payments cleared via receipt ${receiptId} (${slipNumber})`;
+
           await tx.auditEntry.create({
             data: {
               actorId: session.adminId || session.username,
@@ -1541,7 +1546,7 @@ export class ReceiptsService {
               action: 'PLOT_STATUS_CHANGED',
               entityType: 'plot',
               entityId: booking.plot.id,
-              details: `Plot ${booking.plot.plotNumber} auto-promoted from 'booked' to 'allotted' — all payments cleared via receipt ${receiptId} (${slipNumber})`,
+              details: promoDetails,
               oldValue: { status: 'booked' },
               newValue: { status: 'allotted' },
             },
@@ -2041,25 +2046,67 @@ export class ReceiptsService {
           latestHistory &&
           latestHistory.fromStatus === PlotStatus.booked &&
           latestHistory.toStatus === PlotStatus.allotted &&
-          latestHistory.source === 'auto_allot_fully_paid' &&
+          (latestHistory.source === 'auto_allot_fully_paid' ||
+            latestHistory.source === 'auto_allot_possession_paid') &&
           Boolean(latestHistory.reason && latestHistory.reason.includes(booking.id));
 
         if (isAutoAllotForThisBooking) {
-          const allBookingPayments = await tx.paymentRecord.findMany({
-            where: { bookingId: booking.id },
-          });
-          const stillFullyPaid = allBookingPayments.every(
-            (p) => p.status === 'paid' && Number(p.paidAmount) >= Number(p.amount),
-          );
+          let shouldRevert = false;
 
-          if (!stillFullyPaid) {
+          if (booking.paymentType === 'one_time') {
+            // One-time booking: there is no possession row. A missing possession row must not revert it.
+            // Revert only when the plot_one_time bill is missing, not paid, or paidAmount < amount.
+            // If that bill is still fully paid, leave the plot allotted.
+            const oneTimeRecord = await tx.paymentRecord.findFirst({
+              where: {
+                bookingId: booking.id,
+                feeType: 'plot_one_time',
+              },
+            });
+
+            if (
+              !oneTimeRecord ||
+              oneTimeRecord.status !== 'paid' ||
+              Number(oneTimeRecord.paidAmount) < Number(oneTimeRecord.amount)
+            ) {
+              shouldRevert = true;
+            }
+          } else {
+            // Installment booking: revert when any plot_downpayment, plot_installment, plot_biannual, or plot_possession row is missing, not paid, or paidAmount < amount.
+            // Cancelling one installment receipt reverts the plot to booked.
+            // Cancelling the possession receipt reverts the plot to booked.
+            // If every one of those bills is still fully paid, do not revert.
+            const installmentRecords = await tx.paymentRecord.findMany({
+              where: {
+                bookingId: booking.id,
+                feeType: {
+                  in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'],
+                },
+              },
+            });
+
+            const hasPossession = installmentRecords.some((r) => r.feeType === 'plot_possession');
+            const allPaid =
+              installmentRecords.length > 0 &&
+              hasPossession &&
+              installmentRecords.every(
+                (r) => r.status === 'paid' && Number(r.paidAmount) >= Number(r.amount),
+              );
+
+            if (!allPaid) {
+              shouldRevert = true;
+            }
+          }
+
+          if (shouldRevert) {
+            const slip = receipt.slipNumber || receipt.id;
             await updatePlotStatus(tx, {
               plotId: booking.plot.id,
               fromStatus: PlotStatus.allotted,
               toStatus: PlotStatus.booked,
               changedBy: session.adminId || session.username || 'system',
               source: 'receipt_cancellation_undo_allot',
-              reason: `Receipt ${receipt.slipNumber || receipt.id} cancelled; booking ${booking.id} no longer fully paid`,
+              reason: `Receipt ${slip} cancelled; booking ${booking.id} is no longer fully paid.`,
             });
 
             await tx.auditEntry.create({

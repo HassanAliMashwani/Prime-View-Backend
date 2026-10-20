@@ -150,7 +150,9 @@ model Plot {
   currentOwnerId   String?
   currentOwner     Customer?     @relation(fields: [currentOwnerId], references: [id])
   lockedBy         String?
+  lockedByName     String?
   lockedAt         DateTime?
+  lockReason       String?
   reservations     Reservation[]
   bookings         Booking[]
   statusHistory    PlotStatusHistory[]

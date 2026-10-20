@@ -10,9 +10,9 @@ const prisma = new PrismaClient({
 
 async function main() {
   try {
-    await prisma.$executeRawUnsafe(`ALTER TABLE "PaymentRecord" ADD COLUMN IF NOT EXISTS "paidDate" TIMESTAMP(3);`);
-    await prisma.$executeRawUnsafe(`ALTER TABLE "PaymentRecord" ADD COLUMN IF NOT EXISTS "transactionRef" TEXT;`);
-    console.log("Table altered successfully as postgres user.");
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Plot" ADD COLUMN IF NOT EXISTS "lockReason" TEXT;`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE "Plot" ADD COLUMN IF NOT EXISTS "lockedByName" TEXT;`);
+    console.log("Plot table altered successfully with lockReason and lockedByName.");
   } catch (err) {
     console.error("Alter error:", err);
   } finally {

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Plot" ADD COLUMN IF NOT EXISTS "lockReason" TEXT;
+ALTER TABLE "Plot" ADD COLUMN IF NOT EXISTS "lockedByName" TEXT;

@@ -20,6 +20,8 @@ import { BookPlotDto } from './dto/book-plot.dto';
 import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
 import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
 
+import { AcquireLockDto } from './dto/acquire-lock.dto';
+
 @Controller('plots')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
 export class PlotsController {
@@ -42,8 +44,12 @@ export class PlotsController {
 
   @Post(':id/lock')
   @HttpCode(HttpStatus.OK)
-  async acquireLock(@Param('id') id: string, @CurrentSession() session: any) {
-    return this.plotsService.acquireLock(id, session);
+  async acquireLock(
+    @Param('id') id: string,
+    @Body() dto: AcquireLockDto,
+    @CurrentSession() session: any,
+  ) {
+    return this.plotsService.acquireLock(id, dto, session);
   }
 
   @Delete(':id/lock')

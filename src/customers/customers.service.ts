@@ -468,38 +468,67 @@ export class CustomersService {
       OR: orConditions,
     };
 
-    const customers = await this.prisma.customer.findMany({
-      where: whereClause,
-      take: 8,
-      select: {
-        id: true,
-        fullName: true,
-        membershipNo: true,
-        cnic: true,
-        phone: true,
-        email: true,
-        city: true,
-        registrationStatus: true,
-        _count: {
-          select: { plots: true },
+    return await this.prisma.withScopedSession(session, async (tx) => {
+      const customers = await tx.customer.findMany({
+        where: whereClause,
+        take: 8,
+        select: {
+          id: true,
+          fullName: true,
+          membershipNo: true,
+          cnic: true,
+          phone: true,
+          email: true,
+          city: true,
+          registrationStatus: true,
+          bookings: {
+            where: {
+              plot: {
+                status: { in: [PlotStatus.booked, PlotStatus.allotted] },
+              },
+            },
+            select: {
+              plotId: true,
+              plot: {
+                select: {
+                  id: true,
+                  status: true,
+                },
+              },
+            },
+          },
         },
-      },
-      orderBy: { fullName: 'asc' },
-    });
+        orderBy: { fullName: 'asc' },
+      });
 
-    return {
-      members: customers.map((c) => ({
-        id: c.id,
-        fullName: c.fullName,
-        membershipNo: c.membershipNo || '',
-        cnic: c.cnic,
-        phone: c.phone || '',
-        email: c.email || '',
-        city: c.city || '',
-        plotCount: c._count?.plots || 0,
-        registrationStatus: c.registrationStatus,
-      })),
-    };
+      return {
+        members: customers.map((c) => {
+          // Count the member's Booking rows whose plot still exists and whose plot status is booked or allotted.
+          // One plot once.
+          const heldPlotIds = new Set<string>();
+          for (const b of c.bookings) {
+            if (b.plot && (b.plot.status === PlotStatus.booked || b.plot.status === PlotStatus.allotted)) {
+              const key = b.plotId || b.plot.id;
+              if (key) {
+                heldPlotIds.add(key);
+              }
+            }
+          }
+
+          return {
+            id: c.id,
+            fullName: c.fullName,
+            membershipNo: c.membershipNo || '',
+            cnic: c.cnic,
+            phone: c.phone || '',
+            email: c.email || '',
+            city: c.city || '',
+            plotCount: heldPlotIds.size,
+            registrationStatus: c.registrationStatus,
+          };
+        }),
+      };
+    });
   }
 
   async createMinimalBooking(dto: CreateMinimalBookingDto, session: any) {
@@ -1005,17 +1034,34 @@ export class CustomersService {
           },
         });
 
-        const fullPay = await tx.paymentRecord.create({
-          data: {
-            id: `pay-one-${booking.id}-${Date.now()}`,
+        const existingPaidOneTime = await tx.paymentRecord.findFirst({
+          where: {
             bookingId: booking.id,
             feeType: FeeType.plot_one_time,
-            dueDate: now,
-            amount: effectivePrice,
-            paidAmount: effectivePrice,
             status: PaymentStatus.paid,
           },
         });
+
+        let fullPay = existingPaidOneTime;
+        if (!fullPay) {
+          fullPay = await tx.paymentRecord.create({
+            data: {
+              id: `pay-one-${booking.id}-${Date.now()}`,
+              bookingId: booking.id,
+              feeType: FeeType.plot_one_time,
+              dueDate: now,
+              paidDate: now,
+              amount: effectivePrice,
+              paidAmount: effectivePrice,
+              status: PaymentStatus.paid,
+            },
+          });
+        } else if (!fullPay.paidDate) {
+          fullPay = await tx.paymentRecord.update({
+            where: { id: fullPay.id },
+            data: { paidDate: now },
+          });
+        }
         paymentRecords.push(fullPay);
 
         // Allot the plot
@@ -1024,14 +1070,22 @@ export class CustomersService {
             plotId: plot.id,
             fromStatus: plot.status,
             toStatus: PlotStatus.allotted,
-            changedBy: session.adminId || session.username,
+            changedBy: session.adminId || session.username || 'system',
             source: 'allot',
             plotData: {
               currentOwnerId: customer.id,
               lockedBy: null,
+              lockedByName: null,
               lockedAt: null,
+              lockReason: null,
             },
           });
+          plot.status = PlotStatus.allotted;
+          plot.currentOwnerId = customer.id;
+          plot.lockedBy = null;
+          plot.lockedByName = null;
+          plot.lockedAt = null;
+          plot.lockReason = null;
         }
       } else {
         // Installment:
@@ -1131,8 +1185,9 @@ export class CustomersService {
       });
 
       // 6. Society Documents
-      const agreementDoc = await tx.societyDocument.create({
-        data: {
+      const agreementDoc = await tx.societyDocument.upsert({
+        where: { id: `doc-${booking.id}-agr` },
+        create: {
           id: `doc-${booking.id}-agr`,
           customerId: customer.id,
           bookingId: booking.id,
@@ -1141,10 +1196,16 @@ export class CustomersService {
           fileUrl: `/documents/booking-agreement-${booking.id}.pdf`,
           fileSizeKb: 1420,
         },
+        update: {
+          customerId: customer.id,
+          fileName: `Allotment_Agreement_${targetMembershipNo}_${plot.plotNumber}.pdf`,
+          fileUrl: `/documents/booking-agreement-${booking.id}.pdf`,
+        },
       });
 
-      const scheduleDoc = await tx.societyDocument.create({
-        data: {
+      const scheduleDoc = await tx.societyDocument.upsert({
+        where: { id: `doc-${booking.id}-sch` },
+        create: {
           id: `doc-${booking.id}-sch`,
           customerId: customer.id,
           bookingId: booking.id,
@@ -1153,12 +1214,18 @@ export class CustomersService {
           fileUrl: `/documents/installment-schedule-${booking.id}.pdf`,
           fileSizeKb: 1420,
         },
+        update: {
+          customerId: customer.id,
+          fileName: `Installment_Schedule_${targetMembershipNo}_${plot.plotNumber}.pdf`,
+          fileUrl: `/documents/installment-schedule-${booking.id}.pdf`,
+        },
       });
 
       // 7. Optional Physical Documents (Only when non-empty and not placeholder)
       if (dto.applicantPhotoUrl && !dto.applicantPhotoUrl.includes('placeholder')) {
-        await tx.customerDocument.create({
-          data: {
+        await tx.customerDocument.upsert({
+          where: { id: `cdoc-${booking.id}-photo` },
+          create: {
             id: `cdoc-${booking.id}-photo`,
             customerId: customer.id,
             bookingId: booking.id,
@@ -1166,13 +1233,19 @@ export class CustomersService {
             fileName: 'applicant_photo.jpg',
             fileUrl: dto.applicantPhotoUrl,
             fileSizeKb: 250,
-            uploadedById: session.adminId || session.username,
+            uploadedById: session.adminId || session.username || 'system',
+          },
+          update: {
+            customerId: customer.id,
+            fileUrl: dto.applicantPhotoUrl,
+            uploadedById: session.adminId || session.username || 'system',
           },
         });
       }
       if (dto.cnicCopyUrl && !dto.cnicCopyUrl.includes('placeholder')) {
-        await tx.customerDocument.create({
-          data: {
+        await tx.customerDocument.upsert({
+          where: { id: `cdoc-${booking.id}-cnic` },
+          create: {
             id: `cdoc-${booking.id}-cnic`,
             customerId: customer.id,
             bookingId: booking.id,
@@ -1180,7 +1253,12 @@ export class CustomersService {
             fileName: 'applicant_cnic.pdf',
             fileUrl: dto.cnicCopyUrl,
             fileSizeKb: 500,
-            uploadedById: session.adminId || session.username,
+            uploadedById: session.adminId || session.username || 'system',
+          },
+          update: {
+            customerId: customer.id,
+            fileUrl: dto.cnicCopyUrl,
+            uploadedById: session.adminId || session.username || 'system',
           },
         });
       }
