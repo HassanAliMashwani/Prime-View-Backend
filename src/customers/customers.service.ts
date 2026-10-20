@@ -37,7 +37,7 @@ export class CustomersService {
   constructor(
     private prisma: PrismaService,
     private realtime: RealtimeService,
-  ) {}
+  ) { }
 
   /**
    * Helper: System lookup to verify plot registration and validate administrative block scope.
@@ -272,8 +272,8 @@ export class CustomersService {
             plotCount++;
             const billsCount = b.payments
               ? b.payments.filter((p: any) =>
-                  ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
-                ).length
+                ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
+              ).length
               : 0;
             const hasPaymentPlan = billsCount > 0;
             const savedPlan = b.installmentPlan as any;
@@ -419,7 +419,7 @@ export class CustomersService {
    * Minimal Sub Admin Quick Booking Flow (Change Request 07 §5).
    * Creates Customer (minimal, credentialsPending: true) + Booking + flips Plot to booked in 1 atomic transaction.
    */
-    async searchForPicker(session: any, query: string) {
+  async searchForPicker(session: any, query: string) {
     const isSuper = session.role === 'super_admin';
     const canBookOrReserve = Boolean(
       session.permissions?.can_book ||
@@ -3100,9 +3100,9 @@ export class CustomersService {
         },
       });
 
-      this.realtime.broadcast('customers', 'PAYMENT_PLAN_ASSIGNED', { customerId, plotId: plot.id }).catch(() => {});
-      this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_UPDATED', { plotId: plot.id }).catch(() => {});
-      this.realtime.broadcast('plots', 'PLOT_UPDATED', { plotId: plot.id }).catch(() => {});
+      this.realtime.broadcast('customers', 'PAYMENT_PLAN_ASSIGNED', { customerId, plotId: plot.id }).catch(() => { });
+      this.realtime.broadcast(`block:${plot.blockId}`, 'PLOT_UPDATED', { plotId: plot.id }).catch(() => { });
+      this.realtime.broadcast('plots', 'PLOT_UPDATED', { plotId: plot.id }).catch(() => { });
 
       return {
         ok: true,
