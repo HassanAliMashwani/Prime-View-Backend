@@ -743,89 +743,114 @@ export class AdminService {
    * Self-service admin profile details update (fullName, email, phone, avatarUrl).
    */
   async updateProfile(dto: UpdateAdminProfileDto, session: any) {
-    const adminId = session.adminId;
+    const adminId = session?.adminId;
     if (!adminId) {
       throw new UnauthorizedException('Invalid session');
     }
 
-    const admin = await this.prisma.adminUser.findUnique({
-      where: { id: adminId },
-      include: { assignments: true },
-    });
-
-    if (!admin) {
-      throw new NotFoundException('Administrator account not found');
-    }
-
-    if (dto.email && dto.email.trim().toLowerCase() !== admin.email.toLowerCase()) {
-      const existing = await this.prisma.adminUser.findUnique({
-        where: { email: dto.email.trim().toLowerCase() },
+    return await this.prisma.withScopedSession(session, async (tx) => {
+      const admin = await tx.adminUser.findUnique({
+        where: { id: adminId },
+        include: { assignments: true },
       });
-      if (existing && existing.id !== admin.id) {
-        throw new BadRequestException('Email address is already in use by another administrative account.');
-      }
-    }
 
-    let cleanUsername: string | undefined = undefined;
-    if (dto.username !== undefined && dto.username.trim().length > 0) {
-      cleanUsername = dto.username.trim().toLowerCase().replace(/^@/, '');
-      if (cleanUsername !== admin.username.toLowerCase()) {
-        const existingUser = await this.prisma.adminUser.findUnique({
-          where: { username: cleanUsername },
+      if (!admin) {
+        throw new NotFoundException('Administrator account not found');
+      }
+
+      const cleanEmail = (dto.email !== undefined && dto.email.trim().length > 0)
+        ? dto.email.trim().toLowerCase()
+        : undefined;
+
+      if (cleanEmail && cleanEmail !== admin.email.toLowerCase()) {
+        const existing = await tx.adminUser.findUnique({
+          where: { email: cleanEmail },
         });
-        if (existingUser && existingUser.id !== admin.id) {
-          throw new BadRequestException('Username is already taken by another administrator.');
+        if (existing && existing.id !== admin.id) {
+          throw new BadRequestException('Email address is already in use by another administrative account.');
         }
       }
-    }
 
-    const currentPermissions = (admin.permissions && typeof admin.permissions === 'object')
-      ? { ...(admin.permissions as Record<string, any>) }
-      : {};
-
-    if (dto.phone !== undefined) {
-      currentPermissions.phone = dto.phone.trim();
-    }
-    if (dto.avatarUrl !== undefined) {
-      const trimmedAvatar = dto.avatarUrl.trim();
-      if (trimmedAvatar.startsWith('data:') || trimmedAvatar.startsWith('blob:')) {
-        throw new BadRequestException('Profile photos must be uploaded to storage. Data or blob URLs are not permitted.');
+      let cleanUsername: string | undefined = undefined;
+      if (dto.username !== undefined && dto.username.trim().length > 0) {
+        cleanUsername = dto.username.trim().toLowerCase().replace(/^@/, '');
+        if (cleanUsername !== admin.username.toLowerCase()) {
+          const existingUser = await tx.adminUser.findUnique({
+            where: { username: cleanUsername },
+          });
+          if (existingUser && existingUser.id !== admin.id) {
+            throw new BadRequestException('Username is already taken by another administrator.');
+          }
+        }
       }
-      if (trimmedAvatar && !trimmedAvatar.startsWith('https://')) {
-        throw new BadRequestException('Profile photo URL must be an https link.');
-      }
-      currentPermissions.avatarUrl = trimmedAvatar;
-    }
 
-    const updated = await this.prisma.adminUser.update({
-      where: { id: adminId },
-      data: {
-        username: cleanUsername !== undefined ? cleanUsername : undefined,
-        fullName: dto.fullName !== undefined && dto.fullName.trim().length > 0 ? dto.fullName.trim() : undefined,
-        email: dto.email !== undefined && dto.email.trim().length > 0 ? dto.email.trim().toLowerCase() : undefined,
-        permissions: currentPermissions,
-      },
-      include: { assignments: true },
+      const rawName = dto.fullName ?? dto.name;
+      const cleanFullName = (rawName !== undefined && rawName.trim().length > 0)
+        ? rawName.trim()
+        : undefined;
+
+      const existingPermissions = (admin.permissions && typeof admin.permissions === 'object')
+        ? { ...(admin.permissions as Record<string, any>) }
+        : {};
+
+      // Copy existing permission flags onto the saved object; ignore any can_* value sent by browser
+      const permissionsToSave: Record<string, any> = {};
+      for (const [key, val] of Object.entries(existingPermissions)) {
+        if (key !== 'phone' && key !== 'avatarUrl') {
+          permissionsToSave[key] = val;
+        }
+      }
+
+      if (dto.phone !== undefined) {
+        permissionsToSave.phone = dto.phone.trim();
+      } else if (existingPermissions.phone !== undefined) {
+        permissionsToSave.phone = existingPermissions.phone;
+      }
+
+      if (dto.avatarUrl !== undefined) {
+        const trimmedAvatar = dto.avatarUrl.trim();
+        if (trimmedAvatar.startsWith('data:') || trimmedAvatar.startsWith('blob:')) {
+          throw new BadRequestException('Profile photos must be uploaded to storage. Data or blob URLs are not permitted.');
+        }
+        if (trimmedAvatar && !trimmedAvatar.startsWith('https://')) {
+          throw new BadRequestException('Profile photo URL must be an https link.');
+        }
+        permissionsToSave.avatarUrl = trimmedAvatar;
+      } else if (existingPermissions.avatarUrl !== undefined) {
+        permissionsToSave.avatarUrl = existingPermissions.avatarUrl;
+      }
+
+      // Write only fullName, email, username, and the permissions object
+      const updated = await tx.adminUser.update({
+        where: { id: adminId },
+        data: {
+          fullName: cleanFullName,
+          email: cleanEmail,
+          username: cleanUsername,
+          permissions: permissionsToSave,
+        },
+        include: { assignments: true },
+      });
+
+      return {
+        ok: true,
+        message: 'Profile details updated successfully.',
+        admin: {
+          id: updated.id,
+          username: updated.username,
+          email: updated.email,
+          fullName: updated.fullName,
+          phone: permissionsToSave.phone || '',
+          avatarUrl: permissionsToSave.avatarUrl && permissionsToSave.avatarUrl.startsWith('https://') ? permissionsToSave.avatarUrl : '',
+          role: updated.role,
+          status: updated.status,
+          permissions: updated.permissions,
+          assignedBlocks: updated.assignments.map((a) => a.blockId),
+          createdDate: updated.createdDate,
+          lastLogin: updated.lastLogin,
+        },
+      };
     });
-
-    return {
-      ok: true,
-      message: 'Profile details updated successfully.',
-      admin: {
-        id: updated.id,
-        username: updated.username,
-        email: updated.email,
-        fullName: updated.fullName,
-        phone: currentPermissions.phone || '',
-        avatarUrl: currentPermissions.avatarUrl && currentPermissions.avatarUrl.startsWith('https://') ? currentPermissions.avatarUrl : '',
-        role: updated.role,
-        status: updated.status,
-        permissions: updated.permissions,
-        assignedBlocks: updated.assignments.map((a) => a.blockId),
-        createdDate: updated.createdDate,
-        lastLogin: updated.lastLogin,
-      },
-    };
   }
 
   /**

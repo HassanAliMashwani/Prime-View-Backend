@@ -10,12 +10,16 @@ export class UpdateAdminProfileDto {
   fullName?: string;
 
   @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
   @IsEmail()
   email?: string;
 
   @IsOptional()
   @IsString()
-  @Matches(/^(?:0\d{10}|0\d{3}-\d{7})$/, {
+  @Matches(/^(?:0\d{10}|0\d{3}-\d{7})?$/, {
     message: 'Phone number cannot be greater than 11 digits and must follow 03XXXXXXXXX or 03XX-XXXXXXX format.',
   })
   phone?: string;

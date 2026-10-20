@@ -1201,10 +1201,10 @@ export class PlotsService {
 
       const oldPrice = Number(plot.price);
       const newPrice = Number(dto.price);
-      if (isNaN(newPrice) || newPrice <= 0) {
+      if (isNaN(newPrice) || newPrice <= 0 || newPrice % 10 !== 0 || !Number.isInteger(newPrice)) {
         throw new BadRequestException({
           error: 'INVALID_PLOT_PRICE',
-          message: 'Plot price must be greater than zero.',
+          message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
         });
       }
 
@@ -1219,7 +1219,21 @@ export class PlotsService {
         if (booking.installmentPlan) {
           const plan = booking.installmentPlan as any;
           const planYears = Number(plan.planYears || plan.years || 1);
-          const downpayment = Math.floor(newPrice * 0.25);
+
+          let schedule: any[] = [];
+          let downpayment = 0;
+          if (booking.paymentType === PaymentType.installment) {
+            schedule = generateFixedSchedule({
+              plotPriceRupees: newPrice,
+              planYears,
+              bookingDate: booking.bookingDate || new Date(),
+            });
+            const downpaymentRow = schedule.find((s) => s.feeType === FeeType.plot_downpayment);
+            downpayment = downpaymentRow ? downpaymentRow.amount : (schedule[0]?.amount || 0);
+          } else {
+            downpayment = newPrice;
+          }
+
           const totalRows = planYears * 12;
           const biannualCount = planYears * 2;
           const monthlyCount = totalRows - 1 - biannualCount - 1;
@@ -1256,11 +1270,13 @@ export class PlotsService {
             });
 
             if (booking.paymentType === PaymentType.installment) {
-              const schedule = generateFixedSchedule({
-                plotPriceRupees: newPrice,
-                planYears,
-                bookingDate: booking.bookingDate || new Date(),
-              });
+              if (schedule.length === 0) {
+                schedule = generateFixedSchedule({
+                  plotPriceRupees: newPrice,
+                  planYears,
+                  bookingDate: booking.bookingDate || new Date(),
+                });
+              }
 
               // Check if downpayment was already paid
               const existingPaidDown = existingPlotBills.find(

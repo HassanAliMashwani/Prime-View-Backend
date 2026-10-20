@@ -40,7 +40,8 @@ BEGIN
       RAISE EXCEPTION 'Privilege escalation rejected: non-super-admin cannot alter role'
         USING ERRCODE = '42501';
     END IF;
-    IF NEW.permissions::text IS DISTINCT FROM OLD.permissions::text THEN
+    IF (COALESCE(NEW.permissions::jsonb, '{}'::jsonb) - 'avatarUrl' - 'phone') IS DISTINCT FROM 
+       (COALESCE(OLD.permissions::jsonb, '{}'::jsonb) - 'avatarUrl' - 'phone') THEN
       RAISE EXCEPTION 'Privilege escalation rejected: non-super-admin cannot alter permissions'
         USING ERRCODE = '42501';
     END IF;

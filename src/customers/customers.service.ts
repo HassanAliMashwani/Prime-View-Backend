@@ -538,10 +538,10 @@ export class CustomersService {
       effectivePrice = parsedPrice;
     }
 
-    if (effectivePrice <= 0) {
+    if (effectivePrice <= 0 || effectivePrice % 10 !== 0 || !Number.isInteger(effectivePrice)) {
       throw new BadRequestException({
-        error: 'PRICE_NOT_SET',
-        message: 'Plot price must be greater than 0 to complete booking.',
+        error: 'INVALID_PLOT_PRICE',
+        message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
       });
     }
 
@@ -900,10 +900,10 @@ export class CustomersService {
       effectivePrice = parsedPrice;
     }
 
-    if (effectivePrice <= 0) {
+    if (effectivePrice <= 0 || effectivePrice % 10 !== 0 || !Number.isInteger(effectivePrice)) {
       throw new BadRequestException({
-        error: 'PRICE_NOT_SET',
-        message: 'Plot price must be greater than 0 to complete booking.',
+        error: 'INVALID_PLOT_PRICE',
+        message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
       });
     }
 
@@ -1361,10 +1361,10 @@ export class CustomersService {
       effectivePrice = parsedPrice;
     }
 
-    if (effectivePrice <= 0) {
+    if (effectivePrice <= 0 || effectivePrice % 10 !== 0 || !Number.isInteger(effectivePrice)) {
       throw new BadRequestException({
-        error: 'PRICE_NOT_SET',
-        message: 'Plot price must be greater than 0 to complete booking.',
+        error: 'INVALID_PLOT_PRICE',
+        message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
       });
     }
 
@@ -1696,10 +1696,10 @@ export class CustomersService {
       effectivePrice = parsedPrice;
     }
 
-    if (effectivePrice <= 0) {
+    if (effectivePrice <= 0 || effectivePrice % 10 !== 0 || !Number.isInteger(effectivePrice)) {
       throw new BadRequestException({
-        error: 'PRICE_NOT_SET',
-        message: 'Plot price must be greater than 0 to complete booking.',
+        error: 'INVALID_PLOT_PRICE',
+        message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
       });
     }
 
@@ -2822,6 +2822,13 @@ export class CustomersService {
           });
         }
         effectivePrice = parsedPrice;
+      }
+
+      if (effectivePrice <= 0 || effectivePrice % 10 !== 0 || !Number.isInteger(effectivePrice)) {
+        throw new BadRequestException({
+          error: 'INVALID_PLOT_PRICE',
+          message: 'Plot price must end in 0 (e.g. 2,500,000) and contain no decimals. Prices ending in 1 to 9 are not allowed.',
+        });
       }
 
       // If plot money is already paid, do not change the price
