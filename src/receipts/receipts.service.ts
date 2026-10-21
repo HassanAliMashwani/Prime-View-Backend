@@ -347,7 +347,7 @@ export class ReceiptsService {
 
     if (dto.paymentType === 'installment') {
       const unpaidBills = booking.payments
-        .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
+        .filter((p) => installmentFeeTypes.includes(p.feeType) && (dueStatuses.includes(p.status) || Number(p.paidAmount || 0) < Number(p.amount)))
         .sort((a, b) => {
           if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
           if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
@@ -528,7 +528,7 @@ export class ReceiptsService {
       }
 
       const itemLabel = dto.paymentType === 'installment'
-        ? (targetPaymentRecord?.feeType === 'plot_biannual' ? `Biannual #${biannualNumber}` : `Inst. #${dto.installmentNumber}`)
+        ? (targetPaymentRecord?.feeType === 'plot_biannual' ? `Bi-Annual #${biannualNumber}` : `Inst. #${dto.installmentNumber}`)
         : 'Full Payment';
 
       await tx.auditEntry.create({
@@ -877,6 +877,35 @@ export class ReceiptsService {
     });
 
     return { ok: true, receipts: enriched };
+  }
+
+  async getUnreadCount(session: any, sinceStr?: string) {
+    const customerId = session.sub || session.id || session.customerId;
+    if (!customerId) return { ok: true, unreadCount: 0 };
+
+    return this.prisma.withScopedSession(session, async (tx) => {
+      let sinceDate: Date | null = null;
+      if (sinceStr && !isNaN(new Date(sinceStr).getTime())) {
+        sinceDate = new Date(sinceStr);
+      }
+
+      if (!sinceDate) {
+        return { ok: true, unreadCount: 0 };
+      }
+
+      const count = await tx.receiptSubmission.count({
+        where: {
+          customerId,
+          OR: [
+            { uploadedAt: { gt: sinceDate } },
+            { verifiedAt: { gt: sinceDate } },
+            { cancelledAt: { gt: sinceDate } },
+          ],
+        },
+      });
+
+      return { ok: true, unreadCount: count };
+    });
   }
 
   async getBalloonPreview(
@@ -1543,17 +1572,20 @@ export class ReceiptsService {
           });
           if (currentPr) {
             paymentFeeType = currentPr.feeType;
-            if (currentPr.status !== 'paid') {
-              await tx.paymentRecord.update({
-                where: { id: receipt.paymentRecordId },
-                data: {
-                  status: 'paid',
-                  paidAmount: receipt.amount,
-                  paidDate: currentPr.paidDate ?? receipt.paymentDate,
-                  transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
-                },
-              });
-            }
+            const existingPaid = Number(currentPr.paidAmount || 0);
+            const newPaidAmount = existingPaid + Number(receipt.amount);
+            const isFullyPaid = newPaidAmount >= Number(currentPr.amount);
+            const newStatus = isFullyPaid ? 'paid' : (newPaidAmount > 0 ? 'partially_paid' : currentPr.status);
+
+            await tx.paymentRecord.update({
+              where: { id: receipt.paymentRecordId },
+              data: {
+                status: newStatus,
+                paidAmount: newPaidAmount,
+                paidDate: currentPr.paidDate ?? receipt.paymentDate,
+                transactionRef: currentPr.transactionRef ?? receipt.transactionRef,
+              },
+            });
           }
         }
 
@@ -2050,19 +2082,21 @@ export class ReceiptsService {
         },
       });
 
-      // B. Payment status becomes overdue when dueDate is before today, otherwise pending; paidAmount = 0, paidDate = null, transactionRef = null
+      // B. Payment status becomes overdue when dueDate is before today, otherwise pending; or partially_paid if partial money remains
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       const isOverdue = payment.dueDate ? new Date(payment.dueDate) < startOfToday : false;
-      const newPaymentStatus = isOverdue ? 'overdue' : 'pending';
+      const remainingPaid = Math.max(0, Number(payment.paidAmount || 0) - Number(receipt.amount));
+      const isFullyPaid = remainingPaid >= Number(payment.amount);
+      const newPaymentStatus = isFullyPaid ? 'paid' : (remainingPaid > 0 ? 'partially_paid' : (isOverdue ? 'overdue' : 'pending'));
 
       const updatedPayment = await tx.paymentRecord.update({
         where: { id: payment.id },
         data: {
           status: newPaymentStatus,
-          paidAmount: 0,
-          paidDate: null,
-          transactionRef: null,
+          paidAmount: remainingPaid,
+          paidDate: remainingPaid > 0 ? payment.paidDate : null,
+          transactionRef: remainingPaid > 0 ? payment.transactionRef : null,
         },
       });
 
@@ -2602,7 +2636,7 @@ export class ReceiptsService {
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
 
         if (feeType === 'plot_biannual') {
-          paymentDetails = `Biannual #${installmentNumber ?? 1}`;
+          paymentDetails = `Bi-Annual #${installmentNumber ?? 1}`;
         }
 
         return {

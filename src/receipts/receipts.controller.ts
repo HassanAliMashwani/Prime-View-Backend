@@ -61,6 +61,14 @@ export class ReceiptsController {
     return this.receiptsService.getCustomerReceipts(session);
   }
 
+  @Get('unread-count')
+  async getUnreadCount(
+    @Query('since') since: string,
+    @CurrentSession() session: any,
+  ) {
+    return this.receiptsService.getUnreadCount(session, since);
+  }
+
   @Get('balloon-preview')
   async getBalloonPreview(
     @Query('plotId') plotId: string,
