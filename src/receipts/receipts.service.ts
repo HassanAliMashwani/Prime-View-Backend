@@ -129,6 +129,10 @@ const lightweightReceiptSelect = {
   uploadedAt: true,
   replacesReceiptId: true,
   issuedByNameSnapshot: true,
+  cancelledAt: true,
+  cancelledByAdminId: true,
+  cancellationReason: true,
+  cancellationReasonCode: true,
 };
 
 @Injectable()
@@ -442,10 +446,12 @@ export class ReceiptsService {
 
         // Calculate balloon preview
         const pendingInst = booking.payments
-          .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
+          .filter((p) => installmentFeeTypes.includes(p.feeType) && (dueStatuses.includes(p.status) || Number(p.paidAmount || 0) < Number(p.amount)))
           .sort((a, b) => {
             if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
             if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
+            if (a.feeType === 'plot_possession' && b.feeType !== 'plot_possession') return 1;
+            if (b.feeType === 'plot_possession' && a.feeType !== 'plot_possession') return -1;
             const timeA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
             const timeB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
             if (timeA !== timeB) return timeA - timeB;
@@ -528,7 +534,13 @@ export class ReceiptsService {
       }
 
       const itemLabel = dto.paymentType === 'installment'
-        ? (targetPaymentRecord?.feeType === 'plot_biannual' ? `Bi-Annual #${biannualNumber}` : `Inst. #${dto.installmentNumber}`)
+        ? (targetPaymentRecord?.feeType === 'plot_downpayment'
+            ? 'Down payment'
+            : targetPaymentRecord?.feeType === 'plot_possession'
+            ? 'Possession'
+            : targetPaymentRecord?.feeType === 'plot_biannual'
+            ? `Bi-Annual #${biannualNumber}`
+            : `Monthly #${targetPaymentRecord?.installmentNumber || dto.installmentNumber || 1}`)
         : 'Full Payment';
 
       await tx.auditEntry.create({
@@ -828,6 +840,26 @@ export class ReceiptsService {
       });
       const paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
 
+      const allocations = await tx.paymentAllocation.findMany({
+        where: { receiptId: { in: receiptIds } },
+        select: {
+          receiptId: true,
+          paymentRecordId: true,
+          amountApplied: true,
+          allocationType: true,
+        },
+      });
+      const allocMap = new Map<string, any[]>();
+      allocations.forEach((a) => {
+        const list = allocMap.get(a.receiptId) || [];
+        list.push({
+          paymentRecordId: a.paymentRecordId,
+          amountApplied: Number(a.amountApplied),
+          allocationType: a.allocationType,
+        });
+        allocMap.set(a.receiptId, list);
+      });
+
       return receipts.map((r) => {
         const booking = bookingMap.get(r.bookingId);
         const paymentRecord = r.paymentRecordId ? paymentRecordMap.get(r.paymentRecordId) : null;
@@ -863,6 +895,7 @@ export class ReceiptsService {
           installmentNumber: paymentRecord?.installmentNumber,
           verificationToken: r.verificationToken ?? null,
           qrTarget: r.qrTarget ?? null,
+          allocations: allocMap.get(r.id) || [],
           slip: r.slipNumber ? {
             slipNumber: r.slipNumber,
             securityHash: r.securityHash,
@@ -956,10 +989,12 @@ export class ReceiptsService {
     const installmentFeeTypes = ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'];
 
     const pendingInst = booking.payments
-      .filter((p) => installmentFeeTypes.includes(p.feeType) && dueStatuses.includes(p.status))
+      .filter((p) => installmentFeeTypes.includes(p.feeType) && (dueStatuses.includes(p.status) || Number(p.paidAmount || 0) < Number(p.amount)))
       .sort((a, b) => {
         if (a.feeType === 'plot_downpayment' && b.feeType !== 'plot_downpayment') return -1;
         if (b.feeType === 'plot_downpayment' && a.feeType !== 'plot_downpayment') return 1;
+        if (a.feeType === 'plot_possession' && b.feeType !== 'plot_possession') return 1;
+        if (b.feeType === 'plot_possession' && a.feeType !== 'plot_possession') return -1;
         const timeA = a.dueDate ? new Date(a.dueDate).getTime() : 0;
         const timeB = b.dueDate ? new Date(b.dueDate).getTime() : 0;
         if (timeA !== timeB) return timeA - timeB;
@@ -1274,7 +1309,7 @@ export class ReceiptsService {
           const balloonPayments = await tx.paymentRecord.findMany({
             where: {
               bookingId: preReceipt.bookingId,
-              feeType: { in: ['plot_installment', 'plot_biannual', 'plot_possession'] },
+              feeType: { in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'] },
               status: { in: ['pending', 'overdue', 'partially_paid'] },
             },
             select: { id: true },
@@ -1566,7 +1601,7 @@ export class ReceiptsService {
         }
 
         let paymentFeeType: string | null = null;
-        if (receipt.paymentRecordId) {
+        if (receipt.paymentRecordId && receipt.paymentKind !== 'balloon') {
           const currentPr = await tx.paymentRecord.findUnique({
             where: { id: receipt.paymentRecordId },
           });
@@ -2111,94 +2146,61 @@ export class ReceiptsService {
         : null;
 
       if (booking?.plot && booking.plot.status === PlotStatus.allotted) {
-        const latestHistory = await tx.plotStatusHistory.findFirst({
-          where: { plotId: booking.plot.id },
-          orderBy: { changedAt: 'desc' },
-        });
+        let shouldRevert = false;
 
-        const isAutoAllotForThisBooking =
-          latestHistory &&
-          latestHistory.fromStatus === PlotStatus.booked &&
-          latestHistory.toStatus === PlotStatus.allotted &&
-          (latestHistory.source === 'auto_allot_fully_paid' ||
-            latestHistory.source === 'auto_allot_possession_paid') &&
-          Boolean(latestHistory.reason && latestHistory.reason.includes(booking.id));
-
-        if (isAutoAllotForThisBooking) {
-          let shouldRevert = false;
-
-          if (booking.paymentType === 'one_time') {
-            // One-time booking: there is no possession row. A missing possession row must not revert it.
-            // Revert only when the plot_one_time bill is missing, not paid, or paidAmount < amount.
-            // If that bill is still fully paid, leave the plot allotted.
-            const oneTimeRecord = await tx.paymentRecord.findFirst({
-              where: {
-                bookingId: booking.id,
-                feeType: 'plot_one_time',
+        if (booking.paymentType === 'installment') {
+          // Installment booking: revert when any plot_downpayment, plot_installment, plot_biannual, or plot_possession row is missing, not paid, or paidAmount < amount.
+          // Cancelling one installment receipt reverts the plot to booked.
+          // Cancelling the possession receipt reverts the plot to booked.
+          // If every one of those bills is still fully paid, do not revert.
+          const installmentRecords = await tx.paymentRecord.findMany({
+            where: {
+              bookingId: booking.id,
+              feeType: {
+                in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'],
               },
-            });
+            },
+          });
 
-            if (
-              !oneTimeRecord ||
-              oneTimeRecord.status !== 'paid' ||
-              Number(oneTimeRecord.paidAmount) < Number(oneTimeRecord.amount)
-            ) {
-              shouldRevert = true;
-            }
-          } else {
-            // Installment booking: revert when any plot_downpayment, plot_installment, plot_biannual, or plot_possession row is missing, not paid, or paidAmount < amount.
-            // Cancelling one installment receipt reverts the plot to booked.
-            // Cancelling the possession receipt reverts the plot to booked.
-            // If every one of those bills is still fully paid, do not revert.
-            const installmentRecords = await tx.paymentRecord.findMany({
-              where: {
-                bookingId: booking.id,
-                feeType: {
-                  in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'],
-                },
-              },
-            });
+          const hasPossession = installmentRecords.some((r) => r.feeType === 'plot_possession');
+          const allPaid =
+            installmentRecords.length > 0 &&
+            hasPossession &&
+            installmentRecords.every(
+              (r) => r.status === 'paid' && Number(r.paidAmount) >= Number(r.amount),
+            );
 
-            const hasPossession = installmentRecords.some((r) => r.feeType === 'plot_possession');
-            const allPaid =
-              installmentRecords.length > 0 &&
-              hasPossession &&
-              installmentRecords.every(
-                (r) => r.status === 'paid' && Number(r.paidAmount) >= Number(r.amount),
-              );
-
-            if (!allPaid) {
-              shouldRevert = true;
-            }
+          if (!allPaid) {
+            shouldRevert = true;
           }
+        }
 
-          if (shouldRevert) {
-            const slip = receipt.slipNumber || receipt.id;
-            await updatePlotStatus(tx, {
-              plotId: booking.plot.id,
-              fromStatus: PlotStatus.allotted,
-              toStatus: PlotStatus.booked,
-              changedBy: session.adminId || session.username || 'system',
-              source: 'receipt_cancellation_undo_allot',
-              reason: `Receipt ${slip} cancelled; booking ${booking.id} is no longer fully paid.`,
-            });
+        if (shouldRevert) {
+          const slip = receipt.slipNumber || receipt.id;
+          await updatePlotStatus(tx, {
+            plotId: booking.plot.id,
+            fromStatus: PlotStatus.allotted,
+            toStatus: PlotStatus.booked,
+            changedBy: session.adminId || session.username || 'system',
+            source: 'receipt_cancellation_undo_allot',
+            reason: `Receipt ${slip} cancelled; booking ${booking.id} is no longer fully paid.`,
+          });
 
-            await tx.auditEntry.create({
-              data: {
-                actorId: session.adminId || session.username,
-                actorName: session.fullName || session.username,
-                actorRole: session.role,
-                action: 'PLOT_STATUS_CHANGED',
-                entityType: 'plot',
-                entityId: booking.plot.id,
-                details: `Plot ${booking.plot.plotNumber} reverted from 'allotted' to 'booked' due to cancellation of receipt ${receipt.slipNumber || receiptId}`,
-                oldValue: { status: 'allotted' },
-                newValue: { status: 'booked' },
-              },
-            });
+          await tx.auditEntry.create({
+            data: {
+              actorId: session.adminId || session.username,
+              actorName: session.fullName || session.username,
+              actorRole: session.role,
+              action: 'PLOT_STATUS_CHANGED',
+              entityType: 'plot',
+              entityId: booking.plot.id,
+              details: `Plot ${booking.plot.plotNumber} reverted from 'allotted' to 'booked' due to cancellation of receipt ${receipt.slipNumber || receiptId}`,
+              oldValue: { status: 'allotted' },
+              newValue: { status: 'booked' },
+            },
+          });
 
-            plotReverted = true;
-          }
+          plotReverted = true;
         }
       }
 
@@ -2635,7 +2637,7 @@ export class ReceiptsService {
           ? 'Payment: full upfront / one-time'
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
 
-        if (feeType === 'plot_biannual') {
+        if (feeType === 'plot_biannual' || String(feeType || '').toLowerCase().includes('biannual')) {
           paymentDetails = `Bi-Annual #${installmentNumber ?? 1}`;
         }
 

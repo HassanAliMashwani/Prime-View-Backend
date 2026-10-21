@@ -1,5 +1,5 @@
 const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ datasources: { db: { url: process.env.DIRECT_URL } } });
 async function run() {
   const allBookings = await prisma.booking.findMany({
     include: {

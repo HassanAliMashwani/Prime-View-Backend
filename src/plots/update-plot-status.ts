@@ -122,6 +122,11 @@ export async function maybeAllotIfFullyPaid(
         in: ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'],
       },
     },
+    include: {
+      allocations: {
+        include: { receipt: true },
+      },
+    },
   });
 
   if (installmentRecords.length === 0) {
@@ -134,12 +139,30 @@ export async function maybeAllotIfFullyPaid(
     return false;
   }
 
-  // Every one of those rows must have status paid and paidAmount >= amount
-  const allPaid = installmentRecords.every(
-    (r) => r.status === 'paid' && Number(r.paidAmount) >= Number(r.amount),
-  );
+  // Every one of those rows must be fully settled:
+  // status is 'paid' or paidAmount >= amount (including verified allocations)
+  const allPaid = installmentRecords.every((r) => {
+    if (r.status === 'paid' && Number(r.paidAmount) >= Number(r.amount)) {
+      return true;
+    }
+    const verifiedAllocTotal = (r.allocations || [])
+      .filter((a) => a.receipt?.status === 'verified')
+      .reduce((sum, a) => sum + Number(a.amountApplied), 0);
+    const effectivePaid = Number(r.paidAmount || 0) + verifiedAllocTotal;
+    return effectivePaid >= Number(r.amount);
+  });
   if (!allPaid) {
     return false;
+  }
+
+  // Sync any rows where status is paid or covered by allocations but paidAmount was recorded lower
+  for (const r of installmentRecords) {
+    if (Number(r.paidAmount) < Number(r.amount)) {
+      await tx.paymentRecord.update({
+        where: { id: r.id },
+        data: { paidAmount: Number(r.amount), status: 'paid' },
+      });
+    }
   }
 
   // Plot status must be booked
