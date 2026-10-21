@@ -52,7 +52,11 @@ export class SalesService {
       if (session.role === 'super_admin') {
         assignedBlocks = null;
       } else {
-        if (!session.permissions?.can_view_sales_history) {
+        const hasSalesBox = Boolean(
+          session.permissions?.can_view_sales_reports &&
+          session.permissions?.can_view_sales_history
+        );
+        if (!hasSalesBox) {
           throw new ForbiddenException({
             error: 'FORBIDDEN_SALES_HISTORY_ACCESS',
             message: 'You do not have permission to view sales history.',

@@ -14,9 +14,11 @@ import { ReservationsService } from './reservations.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionScopeGuard } from '../auth/guards/permission-scope.guard';
 import { CurrentSession } from '../common/decorators/current-session.decorator';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
 
 @Controller('reservations')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
+@RequirePermission('can_reserve')
 export class ReservationsController {
   constructor(private readonly reservationsService: ReservationsService) {}
 

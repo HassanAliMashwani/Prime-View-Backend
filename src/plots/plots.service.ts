@@ -248,7 +248,11 @@ export class PlotsService {
           message: 'Only Super Admin can lock plots for Town Planning adjustment',
         });
       }
-    } else if (session.role !== 'super_admin' && !session.permissions?.can_reserve && !session.permissions?.can_book) {
+    } else if (
+      session.role !== 'super_admin' &&
+      !(session.permissions?.can_reserve && session.permissions?.can_book && session.permissions?.can_view_master_plan) &&
+      !(session.permissions?.can_create_customer && session.permissions?.can_view_customers)
+    ) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to lock plots for booking or reservation',
@@ -425,7 +429,12 @@ export class PlotsService {
    * Reserve a plot with an admin-specified token fee (Layer 1 Soft Reservation)
    */
   async reservePlot(plotId: string, dto: ReservePlotDto, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_reserve) {
+    const hasBox1 = session.role === 'super_admin' || Boolean(
+      session.permissions?.can_reserve &&
+      session.permissions?.can_book &&
+      session.permissions?.can_view_master_plan
+    );
+    if (!hasBox1) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to reserve plots',
@@ -607,14 +616,18 @@ export class PlotsService {
    */
   async bookPlot(plotId: string, dto: BookPlotDto, session: any) {
     const t0 = Date.now();
+    const hasBox1 = session.role === 'super_admin' || Boolean(
+      session.permissions?.can_reserve &&
+      session.permissions?.can_book &&
+      session.permissions?.can_view_master_plan
+    );
+    if (!hasBox1) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to book plots',
+      });
+    }
     if (session.role !== 'super_admin') {
-      if (!session.permissions?.can_book) {
-        throw new ForbiddenException({
-          error: 'FORBIDDEN',
-          message: 'You do not have permission to book plots',
-        });
-      }
-
       await this.getPlotWithScopeCheck(plotId, session);
     }
 

@@ -6,25 +6,7 @@ function containsRawError(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
 
-  // Uppercase constant error codes (e.g. BALLOON_ENGINE_ERROR, LOCKED_BY_ANOTHER, SLIP_NOT_FOUND)
-  if (/^[A-Z0-9_]{3,}$/.test(trimmed)) {
-    return true;
-  }
-
   const lower = trimmed.toLowerCase();
-
-  // Words "privilege", "escalation", "guard", "policy", "rls"
-  if (
-    lower.includes('privilege') ||
-    lower.includes('escalation') ||
-    lower.includes('guard') ||
-    lower.includes('trigger') ||
-    lower.includes('policy') ||
-    lower.includes('row security') ||
-    lower.includes('rls')
-  ) {
-    return true;
-  }
 
   // Database / SQL / Prisma indicators
   if (
@@ -38,35 +20,15 @@ function containsRawError(text: string): boolean {
     lower.includes('syntax error') ||
     lower.includes('errcode') ||
     lower.includes('sqlstate') ||
-    lower.includes('database') ||
-    lower.includes('table ') ||
-    lower.includes('column ') ||
-    lower.includes('relation ') ||
-    lower.includes('violates ') ||
-    lower.includes('constraint ') ||
-    lower.includes('foreign key') ||
-    lower.includes('duplicate key')
+    lower.includes('violates foreign key') ||
+    lower.includes('unique constraint') ||
+    lower.includes('duplicate key value')
   ) {
     return true;
   }
 
   // SQL statements
-  if (/\b(select|insert|update|delete|drop|alter|truncate|create)\b.*\b(from|into|table|where|set)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Table or model names
-  if (/\b(adminuser|plot|booking|customer|auditentry|blockassignment|paymentschedule|depositslip)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Role names
-  if (/\b(super_admin|sub_admin|system_sweep)\b/i.test(trimmed)) {
-    return true;
-  }
-
-  // Permission flags
-  if (/\bcan_[a-z0-9_]+\b/i.test(trimmed)) {
+  if (/\b(select|insert|update|delete|drop|alter|truncate|create)\b.*\b(from|into|where|set)\b/i.test(trimmed)) {
     return true;
   }
 
@@ -80,17 +42,8 @@ function containsRawError(text: string): boolean {
     trimmed.includes('\\') ||
     trimmed.includes('/src/') ||
     trimmed.includes('/dist/') ||
-    trimmed.includes('/node_modules/') ||
-    trimmed.includes('{') ||
-    trimmed.includes('}') ||
-    trimmed.includes('<') ||
-    trimmed.includes('>')
+    trimmed.includes('/node_modules/')
   ) {
-    return true;
-  }
-
-  // Length check (human plain sentences are under 200 chars)
-  if (trimmed.length > 200) {
     return true;
   }
 
@@ -122,11 +75,17 @@ export class TypedErrorFilter implements ExceptionFilter {
         });
       }
 
-      // 403 stays 403 and says "You do not have permission to do that."
-      // Do not include the blocked permission name or the database rule.
+      // 403 returns the real message if provided
       if (status === HttpStatus.FORBIDDEN) {
+        const exceptionResponse = exception.getResponse();
+        let forbiddenMsg = 'You do not have permission to do that.';
+        if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+          forbiddenMsg = (exceptionResponse as any).message || (exceptionResponse as any).error || forbiddenMsg;
+        } else if (typeof exceptionResponse === 'string') {
+          forbiddenMsg = exceptionResponse;
+        }
         return response.status(HttpStatus.FORBIDDEN).json({
-          message: 'You do not have permission to do that.',
+          message: forbiddenMsg,
         });
       }
 

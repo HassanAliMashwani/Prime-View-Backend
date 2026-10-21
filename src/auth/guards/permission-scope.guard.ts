@@ -10,7 +10,10 @@ export class PermissionScopeGuard implements CanActivate {
     const session = request.user;
     const params = request.params;
     const query = request.query;
-    const requiredPermission = this.reflector.get<string>('permission', context.getHandler());
+    const requiredPermission = this.reflector.getAllAndOverride<string>('permission', [
+      context.getHandler(),
+      context.getClass(),
+    ]);
     const isPublic = this.reflector.getAllAndOverride<boolean>('isPublic', [
       context.getHandler(),
       context.getClass(),
@@ -36,7 +39,39 @@ export class PermissionScopeGuard implements CanActivate {
     }
 
     if (requiredPermission && session.role !== 'super_admin') {
-      if (!session.permissions || !session.permissions[requiredPermission]) {
+      // 1. Group 1: Reserve, Book, Sort Reservations, and Master Plan
+      if (['can_reserve', 'can_book', 'can_view_master_plan'].includes(requiredPermission)) {
+        const hasBox1 = Boolean(
+          session.permissions?.can_reserve &&
+          session.permissions?.can_book &&
+          session.permissions?.can_view_master_plan
+        );
+        if (!hasBox1) {
+          throw new ForbiddenException({ reason: 'PERMISSION_DENIED', message: 'You do not have the required permission' });
+        }
+      }
+      // 2. Group 2: Create Customer Account and View Customer Directory
+      else if (['can_create_customer', 'can_view_customers'].includes(requiredPermission)) {
+        const hasBox2 = Boolean(
+          session.permissions?.can_create_customer &&
+          session.permissions?.can_view_customers
+        );
+        if (!hasBox2) {
+          throw new ForbiddenException({ reason: 'PERMISSION_DENIED', message: 'You do not have the required permission' });
+        }
+      }
+      // 3. Group 3: View Sales History
+      else if (['can_view_sales_reports', 'can_view_sales_history'].includes(requiredPermission)) {
+        const hasBox3 = Boolean(
+          session.permissions?.can_view_sales_reports &&
+          session.permissions?.can_view_sales_history
+        );
+        if (!hasBox3) {
+          throw new ForbiddenException({ reason: 'PERMISSION_DENIED', message: 'You do not have the required permission' });
+        }
+      }
+      // Standalone modules
+      else if (!session.permissions || !session.permissions[requiredPermission]) {
         throw new ForbiddenException({ reason: 'PERMISSION_DENIED', message: 'You do not have the required permission' });
       }
     }

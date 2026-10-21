@@ -549,8 +549,17 @@ export class CustomersService {
 
   async createMinimalBooking(dto: CreateMinimalBookingDto, session: any) {
     const isSuper = session.role === 'super_admin';
-    const canBook = Boolean(session.permissions?.can_book || session.permissions?.can_create_customer);
-    if (!isSuper && !canBook) {
+    const hasBox1 = Boolean(
+      session.permissions?.can_book &&
+      session.permissions?.can_reserve &&
+      session.permissions?.can_view_master_plan
+    );
+    const hasBox2 = Boolean(
+      session.permissions?.can_create_customer &&
+      session.permissions?.can_view_customers
+    );
+    const canBook = isSuper || hasBox1 || hasBox2;
+    if (!canBook) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to book plots.',
@@ -561,8 +570,8 @@ export class CustomersService {
 
     let effectivePrice = Number(plot.price);
     const canSetPrice =
-      session.role === 'super_admin' ||
-      (Boolean(session.permissions?.can_book) &&
+      isSuper ||
+      ((hasBox1 || hasBox2) &&
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
@@ -816,10 +825,15 @@ export class CustomersService {
    * Upgrades minimal customer to 'complete', generates password, establishes official installment schedule & fees.
    */
   async completeMemberRegistration(id: string, dto: CompleteRegistrationDto, session: any) {
-    if (session.role !== 'super_admin') {
+    const isSuper = session.role === 'super_admin';
+    const hasCustomerBox = isSuper || Boolean(
+      session.permissions?.can_create_customer &&
+      session.permissions?.can_view_customers
+    );
+    if (!hasCustomerBox) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'Only Super Administrator has authority to complete member registrations and issue official membership numbers.',
+        message: 'You do not have permission to complete member registrations.',
       });
     }
 
@@ -918,7 +932,8 @@ export class CustomersService {
     let effectivePrice = Number(plot.price);
     const canSetPrice =
       session.role === 'super_admin' ||
-      (Boolean(session.permissions?.can_book) &&
+      (((Boolean(session.permissions?.can_book) && Boolean(session.permissions?.can_reserve) && Boolean(session.permissions?.can_view_master_plan)) ||
+        (Boolean(session.permissions?.can_create_customer) && Boolean(session.permissions?.can_view_customers))) &&
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
@@ -1342,10 +1357,15 @@ export class CustomersService {
    * Create new Customer account and attach first Plot Booking.
    */
   async createCustomerWithBooking(dto: CreateCustomerWithBookingDto, session: any) {
-    if (session.role !== 'super_admin' && !session.permissions?.can_create_customer && !session.permissions?.can_book) {
+    const isSuper = session.role === 'super_admin';
+    const hasCustomerBox = isSuper || Boolean(
+      session.permissions?.can_create_customer &&
+      session.permissions?.can_view_customers
+    );
+    if (!hasCustomerBox) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'You do not have permission to register new customers or book plots.',
+        message: 'You do not have permission to register new customers.',
       });
     }
 
@@ -1428,7 +1448,8 @@ export class CustomersService {
     let effectivePrice = Number(plot.price);
     const canSetPrice =
       session.role === 'super_admin' ||
-      (Boolean(session.permissions?.can_book) &&
+      (((Boolean(session.permissions?.can_book) && Boolean(session.permissions?.can_reserve) && Boolean(session.permissions?.can_view_master_plan)) ||
+        (Boolean(session.permissions?.can_create_customer) && Boolean(session.permissions?.can_view_customers))) &&
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
@@ -1731,10 +1752,15 @@ export class CustomersService {
    * Add additional Plot Booking to an existing customer account.
    */
   async addBookingToCustomer(customerId: string, dto: AddBookingDto, session: any) {
-    if (session.role !== 'super_admin') {
+    const isSuper = session.role === 'super_admin';
+    const hasCustomerBox = isSuper || Boolean(
+      session.permissions?.can_create_customer &&
+      session.permissions?.can_view_customers
+    );
+    if (!hasCustomerBox) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'Only Super Administrator has authority to attach plot bookings and create bills.',
+        message: 'You do not have permission to attach bookings to customer accounts.',
       });
     }
 
@@ -1763,7 +1789,8 @@ export class CustomersService {
     let effectivePrice = Number(plot.price);
     const canSetPrice =
       session.role === 'super_admin' ||
-      (Boolean(session.permissions?.can_book) &&
+      (((Boolean(session.permissions?.can_book) && Boolean(session.permissions?.can_reserve) && Boolean(session.permissions?.can_view_master_plan)) ||
+        (Boolean(session.permissions?.can_create_customer) && Boolean(session.permissions?.can_view_customers))) &&
         Array.isArray(session.assignedBlocks) &&
         session.assignedBlocks.includes(plot.blockId));
 
@@ -2521,13 +2548,11 @@ export class CustomersService {
 
   private assertAdminCustomerAccess(session: any, { superOnly = false } = {}) {
     const isSuper = session.role === 'super_admin';
-    if (superOnly && !isSuper) {
-      throw new ForbiddenException({
-        error: 'FORBIDDEN',
-        message: 'Only Super Admin can perform this action.',
-      });
-    }
-    if (!isSuper && !session.permissions?.can_view_customers) {
+    const hasCustomerBox = isSuper || Boolean(
+      session.permissions?.can_create_customer &&
+      session.permissions?.can_view_customers
+    );
+    if (!hasCustomerBox) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
         message: 'You do not have permission to manage customer portal access.',
@@ -2600,7 +2625,7 @@ export class CustomersService {
    * Admin Issue Credentials (Super Admin only).
    */
   async adminIssueCredentials(id: string, session: any) {
-    this.assertAdminCustomerAccess(session, { superOnly: true });
+    this.assertAdminCustomerAccess(session);
 
     const customer = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.customer.findUnique({

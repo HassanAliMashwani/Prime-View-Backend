@@ -22,3 +22,8 @@ Thumbs.db
 .idea/
 .qodo/
 .agents/
+
+# scratch scripts
+/*.ts
+/*.js
+!index.js

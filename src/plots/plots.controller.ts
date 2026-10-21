@@ -21,9 +21,11 @@ import { TogglePlotAdjustmentDto } from './dto/toggle-adjustment.dto';
 import { UpdatePlotPriceDto } from './dto/update-plot-price.dto';
 
 import { AcquireLockDto } from './dto/acquire-lock.dto';
+import { RequirePermission } from '../common/decorators/require-permission.decorator';
 
 @Controller('plots')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
+@RequirePermission('can_view_master_plan')
 export class PlotsController {
   constructor(private readonly plotsService: PlotsService) {}
 
