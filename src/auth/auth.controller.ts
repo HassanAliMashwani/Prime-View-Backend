@@ -28,8 +28,27 @@ export class AuthController {
 
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('member/login')
-  async memberLogin(@Body() body: Record<string, string>) {
-    return this.authService.memberLogin(body.membershipNo, body.password);
+  async memberLogin(
+    @Body() body: Record<string, string>,
+    @Res({ passthrough: true }) res?: Response,
+  ) {
+    const result = await this.authService.memberLogin(body.membershipNo, body.password);
+    if (res && typeof res.cookie === 'function') {
+      const thirtyMinutesMs = 30 * 60 * 1000;
+      res.cookie('pv_member_token', result.access_token, {
+        maxAge: thirtyMinutesMs,
+        httpOnly: false,
+        sameSite: 'lax',
+        path: '/',
+      });
+      res.cookie('pv_member_session', body.membershipNo?.trim(), {
+        maxAge: thirtyMinutesMs,
+        httpOnly: false,
+        sameSite: 'lax',
+        path: '/',
+      });
+    }
+    return result;
   }
 }
 

@@ -42,7 +42,7 @@ export class CustomersService {
   /**
    * Helper: System lookup to verify plot registration and validate administrative block scope.
    */
-  private async getPlotWithScopeCheck(plotId: string, session: any) {
+  private async getPlotWithScopeCheck(plotId: string, session: any, reservationId?: string) {
     const plot = await this.prisma.withScopedSession(session, async (tx) => {
       return tx.plot.findUnique({
         where: { id: plotId },
@@ -86,6 +86,48 @@ export class CustomersService {
         error: 'PLOT_ALREADY_BOOKED',
         message: 'This plot has already been committed to another owner.',
       });
+    }
+
+    if (plot.status === PlotStatus.reserved) {
+      if (!reservationId) {
+        throw new ConflictException({
+          error: 'PLOT_RESERVED',
+          message: 'Plot is currently reserved and cannot be moved to full registration directly. Resolve the reservation in Sort Reservations.',
+        });
+      }
+      const res = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.reservation.findFirst({
+          where: {
+            id: reservationId,
+            plotId: plot.id,
+            status: ReservationStatus.active,
+          },
+        });
+      });
+      if (!res) {
+        throw new BadRequestException({
+          error: 'INVALID_RESERVATION',
+          message: 'Active reservation not found for this plot.',
+        });
+      }
+    } else {
+      const activeRes = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.reservation.findFirst({
+          where: {
+            plotId: plot.id,
+            status: ReservationStatus.active,
+            validUntil: { gt: new Date() },
+          },
+        });
+      });
+      if (activeRes) {
+        if (!reservationId || activeRes.id !== reservationId) {
+          throw new ConflictException({
+            error: 'PLOT_RESERVED',
+            message: 'Plot is currently reserved and cannot be moved to full registration directly. Resolve the reservation in Sort Reservations.',
+          });
+        }
+      }
     }
 
     // Lock check
@@ -218,8 +260,10 @@ export class CustomersService {
           email: true,
           fatherOrHusbandName: true,
           nokName: true,
+          nokCnic: true,
           mailingAddress: true,
           city: true,
+          createdDate: true,
           accountStatus: true,
           registrationStatus: true,
           credentialsPending: true,
@@ -344,8 +388,10 @@ export class CustomersService {
           email: c.email,
           fatherOrHusbandName: c.fatherOrHusbandName || undefined,
           nokName: c.nokName || undefined,
+          nokCnic: c.nokCnic || undefined,
           mailingAddress: c.mailingAddress || undefined,
           city: c.city || undefined,
+          createdDate: c.createdDate ? c.createdDate.toISOString().split('T')[0] : undefined,
           accountStatus: c.accountStatus,
           registrationStatus: c.registrationStatus,
           credentialsPending: c.credentialsPending,
@@ -494,6 +540,9 @@ export class CustomersService {
           phone: true,
           email: true,
           city: true,
+          mailingAddress: true,
+          nokCnic: true,
+          nokName: true,
           registrationStatus: true,
           bookings: {
             where: {
@@ -538,7 +587,9 @@ export class CustomersService {
             cnic: c.cnic,
             phone: c.phone || '',
             email: c.email || '',
-            city: c.city || '',
+            city: c.city || c.mailingAddress || '',
+            nokCnic: c.nokCnic || '',
+            nokName: c.nokName || '',
             plotCount: heldPlotIds.size,
             registrationStatus: c.registrationStatus,
           };
@@ -566,7 +617,7 @@ export class CustomersService {
       });
     }
 
-    const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
+    const plot = await this.getPlotWithScopeCheck(dto.plotId, session, dto.reservationId);
 
     let effectivePrice = Number(plot.price);
     const canSetPrice =
@@ -606,6 +657,15 @@ export class CustomersService {
         message: 'CNIC must be exactly 13 digits in 00000-0000000-0 format.',
       });
     }
+    if (dto.nokCnic && dto.nokCnic.trim()) {
+      const nokCnicRegex = /^\d{5}-\d{7}-\d{1}$/;
+      if (!nokCnicRegex.test(dto.nokCnic.trim())) {
+        throw new BadRequestException({
+          error: 'INVALID_NOK_CNIC',
+          message: 'Next of Kin CNIC must be exactly 13 digits in 00000-0000000-0 format.',
+        });
+      }
+    }
 
     const now = new Date();
     const customerId = `cust-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
@@ -617,7 +677,7 @@ export class CustomersService {
       const trimmedName = dto.customerName.trim();
       let customer: any = null;
       if (dto.customerId) {
-        customer = await this.prisma.customer.findUnique({
+        customer = await tx.customer.findUnique({
           where: { id: dto.customerId },
         });
         if (!customer) {
@@ -627,13 +687,13 @@ export class CustomersService {
           });
         }
       } else if (dto.cnic) {
-        customer = await this.prisma.customer.findFirst({
+        customer = await tx.customer.findFirst({
           where: { cnic: { equals: normalizedCnic, mode: 'insensitive' } },
         });
       }
 
       if (!customer && trimmedName) {
-        const matchingByName = await this.prisma.customer.findMany({
+        const matchingByName = await tx.customer.findMany({
           where: { fullName: { equals: trimmedName, mode: 'insensitive' } },
         });
         if (matchingByName.length === 1) {
@@ -647,26 +707,34 @@ export class CustomersService {
       }
 
       if (customer) {
+        const updateData: any = {
+          city: dto.city.trim() || customer.city,
+          mailingAddress: customer.mailingAddress || dto.city.trim() || undefined,
+        };
+        if (dto.nokCnic && dto.nokCnic.trim()) {
+          updateData.nokCnic = dto.nokCnic.trim();
+        }
         customer = await tx.customer.update({
           where: { id: customer.id },
-          data: {
-            city: dto.city.trim() || customer.city,
-            mailingAddress: customer.mailingAddress || dto.city.trim() || undefined,
-          },
+          data: updateData,
         });
       } else {
+        const createData: any = {
+          id: customerId,
+          fullName: trimmedName,
+          cnic: normalizedCnic,
+          city: dto.city.trim(),
+          mailingAddress: dto.city.trim(),
+          registrationStatus: 'minimal',
+          credentialsPending: true,
+          accountStatus: 'active',
+          termsAccepted: false,
+        };
+        if (dto.nokCnic && dto.nokCnic.trim()) {
+          createData.nokCnic = dto.nokCnic.trim();
+        }
         customer = await tx.customer.create({
-          data: {
-            id: customerId,
-            fullName: trimmedName,
-            cnic: normalizedCnic,
-            city: dto.city.trim(),
-            mailingAddress: dto.city.trim(),
-            registrationStatus: 'minimal',
-            credentialsPending: true,
-            accountStatus: 'active',
-            termsAccepted: false,
-          },
+          data: createData,
         });
       }
 
@@ -1369,7 +1437,7 @@ export class CustomersService {
       });
     }
 
-    const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
+    const plot = await this.getPlotWithScopeCheck(dto.plotId, session, dto.reservationId);
 
     const cnicRegex = /^\d{5}-\d{7}-\d{1}$/;
     if (!cnicRegex.test(dto.cnic)) {
@@ -1784,7 +1852,7 @@ export class CustomersService {
       });
     }
 
-    const plot = await this.getPlotWithScopeCheck(dto.plotId, session);
+    const plot = await this.getPlotWithScopeCheck(dto.plotId, session, dto.reservationId);
 
     let effectivePrice = Number(plot.price);
     const canSetPrice =

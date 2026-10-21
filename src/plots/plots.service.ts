@@ -674,6 +674,29 @@ export class PlotsService {
         });
       }
 
+      if (plot.status === PlotStatus.reserved && !dto.reservationId) {
+        throw new ConflictException({
+          error: 'PLOT_RESERVED',
+          message: 'Plot is currently reserved and cannot be booked directly. Resolve the reservation in Sort Reservations.',
+        });
+      }
+
+      if (!dto.reservationId) {
+        const activeRes = await tx.reservation.findFirst({
+          where: {
+            plotId: plot.id,
+            status: ReservationStatus.active,
+            validUntil: { gt: now },
+          },
+        });
+        if (activeRes) {
+          throw new ConflictException({
+            error: 'PLOT_RESERVED',
+            message: 'Plot is currently reserved and cannot be booked directly. Resolve the reservation in Sort Reservations.',
+          });
+        }
+      }
+
       // Lock-ownership re-check (Exception 5.1 / Doc 10)
       if (plot.lockedBy && plot.lockedBy !== session.adminId) {
         const lockedAtDate = plot.lockedAt ? new Date(plot.lockedAt) : null;
@@ -1079,11 +1102,37 @@ export class PlotsService {
       });
     }
 
-    if (dto.isAdjustment && plot.category !== 'residential' && plot.category !== 'commercial') {
-      throw new BadRequestException({
-        error: 'INVALID_ADJUSTMENT_CATEGORY',
-        message: 'Only residential and commercial plots can be put into adjustment.',
+    if (dto.isAdjustment) {
+      if (plot.category !== 'residential' && plot.category !== 'commercial') {
+        throw new BadRequestException({
+          error: 'INVALID_ADJUSTMENT_CATEGORY',
+          message: 'Only residential and commercial plots can be put into adjustment.',
+        });
+      }
+
+      if (plot.status === PlotStatus.reserved || plot.lockReason === 'reserve') {
+        throw new BadRequestException({
+          error: 'PLOT_RESERVED',
+          message: 'Cannot place plot into adjustment while it is reserved.',
+        });
+      }
+
+      const activeRes = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.reservation.findFirst({
+          where: {
+            plotId: plot.id,
+            status: ReservationStatus.active,
+            validUntil: { gt: new Date() },
+          },
+        });
       });
+
+      if (activeRes) {
+        throw new BadRequestException({
+          error: 'PLOT_RESERVED',
+          message: 'Cannot place plot into adjustment while it is reserved.',
+        });
+      }
     }
 
     const now = new Date();

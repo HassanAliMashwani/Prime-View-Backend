@@ -276,9 +276,12 @@ export class ReceiptsService {
           buffer,
         );
         if (!fileCheck.valid) {
+          const isExecutable = fileCheck.error === 'DISALLOWED_EXECUTABLE_CONTENT';
           throw new BadRequestException({
             error: fileCheck.error || 'INVALID_UPLOADED_FILE',
-            message: `Receipt upload rejected: ${fileCheck.error}`,
+            message: isExecutable
+              ? 'This file was not accepted. A receipt must be a photo or a PDF. This file contains program content, so it cannot be uploaded.'
+              : `Receipt upload rejected: ${fileCheck.error}`,
           });
         }
       } else {
@@ -298,9 +301,15 @@ export class ReceiptsService {
         const expectedMime = EXT_TO_MIME[ext] || 'image/jpeg';
         const fileCheck = await this.storageService.verifyUploadedObject('receipts', cleanKey, expectedMime);
         if (!fileCheck.valid) {
+          if (cleanKey) {
+            await this.storageService.deleteUploadedObject('receipts', cleanKey).catch(() => {});
+          }
+          const isExecutable = fileCheck.error === 'DISALLOWED_EXECUTABLE_CONTENT';
           throw new BadRequestException({
             error: fileCheck.error || 'INVALID_UPLOADED_FILE',
-            message: `Receipt upload rejected: ${fileCheck.error}`,
+            message: isExecutable
+              ? 'This file was not accepted. A receipt must be a photo or a PDF. This file contains program content, so it cannot be uploaded.'
+              : `Receipt upload rejected: ${fileCheck.error}`,
           });
         }
       }

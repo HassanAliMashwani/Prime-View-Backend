@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
@@ -494,5 +494,39 @@ export class StorageService {
       sizeBytes: realSize,
       mimeType: detected.mimeType,
     };
+  }
+
+  /**
+   * Delete an uploaded object from storage if validation fails (e.g. executable content attack).
+   */
+  async deleteUploadedObject(bucket: string, key: string): Promise<boolean> {
+    try {
+      let objectPath = key.split('?')[0].trim();
+      if (objectPath.startsWith(`${bucket}/`)) {
+        objectPath = objectPath.substring(bucket.length + 1);
+      } else if (objectPath.startsWith(`/${bucket}/`)) {
+        objectPath = objectPath.substring(bucket.length + 2);
+      }
+      if (objectPath.startsWith('/')) {
+        objectPath = objectPath.substring(1);
+      }
+
+      if (this.supabase) {
+        await this.supabase.storage.from(bucket).remove([objectPath]);
+        return true;
+      }
+      if (this.s3Client) {
+        await this.s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: bucket,
+            Key: objectPath,
+          })
+        );
+        return true;
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to clean up rejected object ${bucket}/${key}: ${err.message}`);
+    }
+    return false;
   }
 }
