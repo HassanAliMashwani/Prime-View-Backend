@@ -25,16 +25,17 @@ import { RequirePermission } from '../common/decorators/require-permission.decor
 
 @Controller('plots')
 @UseGuards(JwtAuthGuard, PermissionScopeGuard)
-@RequirePermission('can_view_master_plan')
 export class PlotsController {
   constructor(private readonly plotsService: PlotsService) {}
 
   @Get()
+  @RequirePermission('can_view_master_plan')
   async findAll(@Query('blockId') blockId: string, @Query('search') search: string, @CurrentSession() session: any) {
     return this.plotsService.findAll(blockId, session, search);
   }
 
   @Get('sync/locks')
+  @RequirePermission('can_view_master_plan')
   async getBlockLocks(@Query('blockId') blockId: string, @CurrentSession() session: any) {
     return this.plotsService.getBlockLocks(blockId, session);
   }

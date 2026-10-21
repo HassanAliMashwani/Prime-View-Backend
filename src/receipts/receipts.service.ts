@@ -1763,10 +1763,11 @@ export class ReceiptsService {
     session: any,
     idempotencyKey?: string,
   ) {
-    if (session.role !== 'super_admin') {
+    const hasAuth = Boolean(session.permissions?.can_verify_receipts);
+    if (session.role !== 'super_admin' && !hasAuth) {
       throw new ForbiddenException({
         error: 'FORBIDDEN',
-        message: 'Only super_admin can cancel a receipt.',
+        message: 'Only authorized administrators can cancel a receipt.',
       });
     }
 

@@ -212,6 +212,16 @@ export class PlotsService {
         throw new NotFoundException({ error: 'PLOT_NOT_FOUND', reason: 'PLOT_NOT_FOUND', message: 'Plot not found' });
       }
 
+      const canView = session.role === 'super_admin' ||
+        Boolean(session.permissions?.can_view_master_plan) ||
+        Boolean(session.permissions?.can_create_customer && session.permissions?.can_view_customers);
+      if (!canView) {
+        throw new ForbiddenException({
+          error: 'FORBIDDEN',
+          message: 'You do not have permission to view plot details',
+        });
+      }
+
       if (session.role !== 'super_admin' && !session.assignedBlocks?.includes(plot.blockId)) {
         throw new ForbiddenException({
           error: 'OUT_OF_SCOPE',
@@ -372,6 +382,16 @@ export class PlotsService {
    * Release an acquired soft lock manually
    */
   async releaseLock(plotId: string, session: any) {
+    const canRelease = session.role === 'super_admin' ||
+      Boolean(session.permissions?.can_view_master_plan) ||
+      Boolean(session.permissions?.can_create_customer && session.permissions?.can_view_customers);
+    if (!canRelease) {
+      throw new ForbiddenException({
+        error: 'FORBIDDEN',
+        message: 'You do not have permission to release locks',
+      });
+    }
+
     await this.getPlotWithScopeCheck(plotId, session);
 
     const result = await this.prisma.withScopedSession(session, async (tx) => {
