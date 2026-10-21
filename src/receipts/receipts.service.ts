@@ -518,6 +518,19 @@ export class ReceiptsService {
         },
       });
 
+      let biannualNumber = dto.installmentNumber || 1;
+      if (targetPaymentRecord?.feeType === 'plot_biannual') {
+        const biannualList = booking.payments
+          .filter((p) => p.feeType === 'plot_biannual')
+          .sort((a, b) => new Date(a.dueDate || 0).getTime() - new Date(b.dueDate || 0).getTime());
+        const bIdx = biannualList.findIndex((p) => p.id === targetPaymentRecord.id);
+        biannualNumber = bIdx >= 0 ? bIdx + 1 : (targetPaymentRecord.installmentNumber || 1);
+      }
+
+      const itemLabel = dto.paymentType === 'installment'
+        ? (targetPaymentRecord?.feeType === 'plot_biannual' ? `Biannual #${biannualNumber}` : `Inst. #${dto.installmentNumber}`)
+        : 'Full Payment';
+
       await tx.auditEntry.create({
         data: {
           actorId: customer.id,
@@ -526,7 +539,7 @@ export class ReceiptsService {
           action: 'RECEIPT_SUBMITTED',
           entityType: 'receipt',
           entityId: receiptId,
-          details: `Customer submitted deposit receipt for Plot ${booking.plot.plotNumber} (${dto.paymentType === 'installment' ? `Inst. #${dto.installmentNumber}` : 'Full Payment'}) - PKR ${Number(dto.amount).toLocaleString()} via Depository Bank: ${bank}`,
+          details: `Customer submitted deposit receipt for Plot ${booking.plot.plotNumber} (${itemLabel}) - PKR ${Number(dto.amount).toLocaleString()} via Depository Bank: ${bank}`,
           newValue: {
             receiptId,
             plotNumber: booking.plot.plotNumber,
@@ -546,6 +559,19 @@ export class ReceiptsService {
       amount: dto.amount,
     });
 
+    let resolvedInstNumber = dto.installmentNumber;
+    if (dto.paymentType === 'installment' && targetPaymentRecord) {
+      if (targetPaymentRecord.feeType === 'plot_biannual') {
+        const biannualList = booking.payments
+          .filter((p) => p.feeType === 'plot_biannual')
+          .sort((a, b) => new Date(a.dueDate || 0).getTime() - new Date(b.dueDate || 0).getTime());
+        const bIdx = biannualList.findIndex((p) => p.id === targetPaymentRecord.id);
+        resolvedInstNumber = bIdx >= 0 ? bIdx + 1 : (targetPaymentRecord.installmentNumber || 1);
+      } else {
+        resolvedInstNumber = targetPaymentRecord.installmentNumber;
+      }
+    }
+
     return {
       ok: true,
       receipt: {
@@ -555,7 +581,8 @@ export class ReceiptsService {
         plotNumber: booking.plot.plotNumber,
         blockName: booking.plot.block?.name || booking.plot.blockId,
         paymentType: dto.paymentType,
-        installmentNumber: dto.paymentType === 'installment' && targetPaymentRecord ? targetPaymentRecord.installmentNumber : dto.installmentNumber,
+        feeType: targetPaymentRecord?.feeType || '',
+        installmentNumber: resolvedInstNumber,
       },
     };
   }
@@ -2569,9 +2596,13 @@ export class ReceiptsService {
           ? (paymentDateVal instanceof Date ? paymentDateVal.toISOString().split('T')[0] : String(paymentDateVal).split('T')[0])
           : null;
 
-        const paymentDetails = isOneTime
+        let paymentDetails = isOneTime
           ? 'Payment: full upfront / one-time'
           : (installmentNumber !== null ? `Installment #${installmentNumber}` : 'Payment: installment');
+
+        if (feeType === 'plot_biannual') {
+          paymentDetails = `Biannual #${installmentNumber ?? 1}`;
+        }
 
         return {
           exists: true,
