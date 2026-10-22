@@ -62,4 +62,9 @@ export class SubmitReceiptDto {
   @IsOptional()
   @IsString()
   customerId?: string;
+
+  // Optional replacesReceiptId for re-uploading a declined receipt
+  @IsOptional()
+  @IsString()
+  replacesReceiptId?: string;
 }

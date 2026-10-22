@@ -349,7 +349,62 @@ export class ReceiptsService {
     const dueStatuses = ['pending', 'overdue', 'partially_paid'];
     const installmentFeeTypes = ['plot_downpayment', 'plot_installment', 'plot_biannual', 'plot_possession'];
 
-    if (dto.paymentType === 'installment') {
+    let replacedReceipt: any = null;
+    if (dto.replacesReceiptId) {
+      replacedReceipt = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.receiptSubmission.findUnique({
+          where: { id: dto.replacesReceiptId },
+        });
+      });
+      if (!replacedReceipt || replacedReceipt.customerId !== customer.id || replacedReceipt.bookingId !== booking.id) {
+        throw new BadRequestException({
+          error: 'INVALID_REPLACED_RECEIPT',
+          message: 'The receipt to be replaced was not found on this member booking.',
+        });
+      }
+      if (replacedReceipt.status !== 'rejected' && replacedReceipt.status !== 'cancelled') {
+        throw new BadRequestException({
+          error: 'RECEIPT_NOT_DECLINED',
+          message: 'Only a declined or cancelled receipt can be re-uploaded.',
+        });
+      }
+      const existingReplacement = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.receiptSubmission.findFirst({
+          where: {
+            replacesReceiptId: dto.replacesReceiptId,
+            status: { in: ['pending', 'verified'] },
+          },
+        });
+      });
+      if (existingReplacement) {
+        throw new ConflictException({
+          error: 'REPLACEMENT_ALREADY_EXISTS',
+          message:
+            existingReplacement.status === 'pending'
+              ? 'A replacement receipt is already pending verification for this bill.'
+              : 'This declined receipt has already been successfully replaced and verified.',
+        });
+      }
+    }
+
+    if (replacedReceipt) {
+      if (replacedReceipt.paymentRecordId) {
+        targetPaymentRecord = booking.payments.find((p) => p.id === replacedReceipt.paymentRecordId);
+      }
+      const billDue = targetPaymentRecord
+        ? (Number(targetPaymentRecord.paidAmount) >= Number(targetPaymentRecord.amount)
+            ? Number(replacedReceipt.amount)
+            : Math.max(0, Number(targetPaymentRecord.amount) - Number(targetPaymentRecord.paidAmount)))
+        : Number(replacedReceipt.amount);
+
+      unpaidOnNextBill = billDue;
+
+      const remainingUnpaidBills = booking.payments
+        .filter((p) => installmentFeeTypes.includes(p.feeType) && (dueStatuses.includes(p.status) || Number(p.paidAmount || 0) < Number(p.amount)))
+        .reduce((acc, p) => acc + Math.max(0, Number(p.amount) - Number(p.paidAmount)), 0);
+
+      totalStillOwedOnPlot = Math.max(billDue, remainingUnpaidBills);
+    } else if (dto.paymentType === 'installment') {
       const unpaidBills = booking.payments
         .filter((p) => installmentFeeTypes.includes(p.feeType) && (dueStatuses.includes(p.status) || Number(p.paidAmount || 0) < Number(p.amount)))
         .sort((a, b) => {
@@ -484,7 +539,13 @@ export class ReceiptsService {
           customerId: customer.id,
           bookingId: booking.id,
           status: 'pending',
-          ...(paymentKind === 'balloon' ? {} : dto.paymentType === 'one_time' && targetPaymentRecord ? { paymentRecordId: targetPaymentRecord.id } : {}),
+          ...(dto.replacesReceiptId
+            ? { replacesReceiptId: dto.replacesReceiptId }
+            : paymentKind === 'balloon'
+            ? {}
+            : dto.paymentType === 'one_time' && targetPaymentRecord
+            ? { paymentRecordId: targetPaymentRecord.id }
+            : {}),
         },
       });
     });
@@ -521,6 +582,7 @@ export class ReceiptsService {
             : dto.receiptFileUrl.split('/receipts/')[1] || dto.receiptFileUrl).split('?')[0].trim(),
           status: 'pending',
           uploadedAt: now,
+          ...(dto.replacesReceiptId ? { replacesReceiptId: dto.replacesReceiptId } : {}),
         },
       });
 
@@ -661,6 +723,7 @@ export class ReceiptsService {
             qrTarget: true,
             securityHash: true,
             uploadedAt: true,
+            replacesReceiptId: true,
             issuedByNameSnapshot: true,
             customer: {
               select: {
@@ -1346,6 +1409,7 @@ export class ReceiptsService {
             transactionRef: true,
             customerId: true,
             previewData: true,
+            replacesReceiptId: true,
             customer: {
               select: {
                 id: true,
@@ -1539,30 +1603,51 @@ export class ReceiptsService {
               status: p.status,
             }));
 
-          const engineResult = allocateBalloon(Number(receipt.amount), pendingInst);
-          if (engineResult.error) {
-            throw new UnprocessableEntityException({ error: 'BALLOON_ERROR', message: engineResult.error });
-          }
-
-          const oldPreview = receipt.previewData || { allocations: [] };
-          const sortAllocations = (a: any[]) =>
-            [...a].map((alloc) => ({
-              paymentRecordId: alloc.paymentRecordId,
-              amountApplied: alloc.amountApplied,
-              allocationType: alloc.allocationType,
-            })).sort((x, y) => x.paymentRecordId.localeCompare(y.paymentRecordId));
-
-          const oldSorted = JSON.stringify(sortAllocations((oldPreview as any).allocations || []));
-          const newSorted = JSON.stringify(sortAllocations(engineResult.allocations));
-
-          if (oldSorted !== newSorted && !dto.confirmPreviewDrift) {
-            throw new ConflictException({
-              error: 'PREVIEW_DRIFT',
-              message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
-              newPreview: engineResult,
+          // Rule 8: If this is a re-upload of an already paid bill, only the extra above the bill is a balloon
+          let balloonAmount = Number(receipt.amount);
+          if (receipt.replacesReceiptId && receipt.paymentRecordId) {
+            const currentPr = await tx.paymentRecord.findUnique({
+              where: { id: receipt.paymentRecordId },
             });
+            if (currentPr) {
+              const existingPaid = Number(currentPr.paidAmount || 0);
+              const needed = Math.max(0, Number(currentPr.amount) - existingPaid);
+              if (needed === 0) {
+                // Bill was already fully paid, only extra above bill applies to remaining balance
+                const billAmount = Number(currentPr.amount);
+                balloonAmount = Math.max(0, balloonAmount - billAmount);
+              }
+            }
           }
-          finalAllocations = engineResult.allocations;
+
+          if (balloonAmount > 0 && pendingInst.length > 0) {
+            const engineResult = allocateBalloon(balloonAmount, pendingInst);
+            if (engineResult.error) {
+              throw new UnprocessableEntityException({ error: 'BALLOON_ERROR', message: engineResult.error });
+            }
+
+            const oldPreview = receipt.previewData || { allocations: [] };
+            const sortAllocations = (a: any[]) =>
+              [...a].map((alloc) => ({
+                paymentRecordId: alloc.paymentRecordId,
+                amountApplied: alloc.amountApplied,
+                allocationType: alloc.allocationType,
+              })).sort((x, y) => x.paymentRecordId.localeCompare(y.paymentRecordId));
+
+            const oldSorted = JSON.stringify(sortAllocations((oldPreview as any).allocations || []));
+            const newSorted = JSON.stringify(sortAllocations(engineResult.allocations));
+
+            if (oldSorted !== newSorted && !dto.confirmPreviewDrift) {
+              throw new ConflictException({
+                error: 'PREVIEW_DRIFT',
+                message: 'The customer schedule has changed since they submitted this receipt. Review the updated allocations and confirm.',
+                newPreview: engineResult,
+              });
+            }
+            finalAllocations = engineResult.allocations;
+          } else {
+            finalAllocations = [];
+          }
 
           if (finalAllocations && finalAllocations.length > 0) {
             // Write the allocations in one batch
@@ -1608,7 +1693,17 @@ export class ReceiptsService {
           if (currentPr) {
             paymentFeeType = currentPr.feeType;
             const existingPaid = Number(currentPr.paidAmount || 0);
-            const newPaidAmount = existingPaid + Number(receipt.amount);
+
+            // Rule 8: Accepting a re-upload must not add the same bill twice.
+            // Kokab's Bi-Annual #1 is already verified by MZN-09.
+            // If already fully paid, do not add receipt.amount onto this bill!
+            let amountToApply = Number(receipt.amount);
+            if (receipt.replacesReceiptId) {
+              const needed = Math.max(0, Number(currentPr.amount) - existingPaid);
+              amountToApply = Math.min(amountToApply, needed);
+            }
+
+            const newPaidAmount = existingPaid + amountToApply;
             const isFullyPaid = newPaidAmount >= Number(currentPr.amount);
             const newStatus = isFullyPaid ? 'paid' : (newPaidAmount > 0 ? 'partially_paid' : currentPr.status);
 
@@ -1675,6 +1770,24 @@ export class ReceiptsService {
             },
           },
         });
+
+        if (receipt.replacesReceiptId) {
+          await tx.auditEntry.create({
+            data: {
+              actorId: session.adminId || session.username,
+              actorName: session.fullName || session.username,
+              actorRole: session.role,
+              action: 'RECEIPT_REPLACED',
+              entityType: 'receipt',
+              entityId: receipt.replacesReceiptId,
+              details: `Declined receipt ${receipt.replacesReceiptId} successfully replaced by verified receipt ${receiptId} (${slipNumber})`,
+              newValue: {
+                replacementReceiptId: receiptId,
+                slipNumber,
+              },
+            },
+          });
+        }
 
         // CONSUME RESERVATION
         await tx.receiptNumberReservation.update({
