@@ -46,11 +46,8 @@ export class InventoryService {
       let blocksQuery: any = blockId ? { id: blockId } : {};
 
       if (session.role === 'sub_admin') {
-        const adminUser = await tx.adminUser.findUnique({
-          where: { id: session.adminId },
-          include: { assignments: true },
-        });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
+        const sessionAny = session as any;
+        const assignedBlocks = Array.isArray(sessionAny.assignedBlocks) ? sessionAny.assignedBlocks : [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
@@ -172,11 +169,8 @@ export class InventoryService {
       let blocksQuery: any = blockId ? { id: blockId } : {};
 
       if (session.role === 'sub_admin') {
-        const adminUser = await tx.adminUser.findUnique({
-          where: { id: session.adminId },
-          include: { assignments: true },
-        });
-        const assignedBlocks = adminUser?.assignments?.map((a) => a.blockId) || [];
+        const sessionAny = session as any;
+        const assignedBlocks = Array.isArray(sessionAny.assignedBlocks) ? sessionAny.assignedBlocks : [];
         if (blockId && !assignedBlocks.includes(blockId)) {
           return {
             ok: true,
@@ -390,7 +384,9 @@ export class InventoryService {
             LEFT JOIN (
               SELECT DISTINCT ON (psh."plotId") psh."plotId", psh."toStatus"
               FROM "PlotStatusHistory" psh
+              JOIN "Plot" p2 ON p2."id" = psh."plotId"
               WHERE psh."changedAt" <= m.m_end
+                AND p2."blockId" IN (${Prisma.join(allBlockIds)})
               ORDER BY psh."plotId", psh."changedAt" DESC
             ) latest ON latest."plotId" = p."id"
             WHERE p."blockId" IN (${Prisma.join(allBlockIds)})
