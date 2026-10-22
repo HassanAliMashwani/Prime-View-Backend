@@ -368,22 +368,29 @@ export class ReceiptsService {
           message: 'Only a declined or cancelled receipt can be re-uploaded.',
         });
       }
-      const existingReplacement = await this.prisma.withScopedSession(session, async (tx) => {
-        return tx.receiptSubmission.findFirst({
+      const existingReplacements = await this.prisma.withScopedSession(session, async (tx) => {
+        return tx.receiptSubmission.findMany({
           where: {
             replacesReceiptId: dto.replacesReceiptId,
-            status: { in: ['pending', 'verified'] },
           },
+          orderBy: { uploadedAt: 'desc' },
         });
       });
-      if (existingReplacement) {
+      const activeReplacement = existingReplacements.find(
+        (r) => r.status === 'pending' || r.status === 'verified',
+      );
+      if (activeReplacement) {
         throw new ConflictException({
           error: 'REPLACEMENT_ALREADY_EXISTS',
           message:
-            existingReplacement.status === 'pending'
+            activeReplacement.status === 'pending'
               ? 'A replacement receipt is already pending verification for this bill.'
               : 'This declined receipt has already been successfully replaced and verified.',
         });
+      }
+      const rejectedReplacement = existingReplacements.find((r) => r.status === 'rejected');
+      if (rejectedReplacement) {
+        dto.replacesReceiptId = rejectedReplacement.id;
       }
     }
 
@@ -391,10 +398,15 @@ export class ReceiptsService {
       if (replacedReceipt.paymentRecordId) {
         targetPaymentRecord = booking.payments.find((p) => p.id === replacedReceipt.paymentRecordId);
       }
+      if (!targetPaymentRecord && replacedReceipt.feeType) {
+        targetPaymentRecord = booking.payments.find(
+          (p) =>
+            p.feeType === replacedReceipt.feeType &&
+            (p.installmentNumber || 1) === (replacedReceipt.installmentNumber || 1),
+        );
+      }
       const billDue = targetPaymentRecord
-        ? (Number(targetPaymentRecord.paidAmount) >= Number(targetPaymentRecord.amount)
-            ? Number(replacedReceipt.amount)
-            : Math.max(0, Number(targetPaymentRecord.amount) - Number(targetPaymentRecord.paidAmount)))
+        ? Math.max(0, Number(targetPaymentRecord.amount) - Number(targetPaymentRecord.paidAmount || 0))
         : Number(replacedReceipt.amount);
 
       unpaidOnNextBill = billDue;
@@ -480,6 +492,21 @@ export class ReceiptsService {
     } else if (dto.paymentType === 'installment') {
       if (paymentKind === 'regular') {
         if (Math.abs(Number(dto.amount) - unpaidOnNextBill) > 0.01) {
+          if (Number(dto.amount) > unpaidOnNextBill) {
+            const billName = targetPaymentRecord
+              ? (targetPaymentRecord.feeType === 'plot_downpayment'
+                  ? 'Down Payment'
+                  : targetPaymentRecord.feeType === 'plot_possession'
+                  ? 'Possession'
+                  : targetPaymentRecord.feeType === 'plot_biannual'
+                  ? `Bi-Annual #${targetPaymentRecord.installmentNumber || 1}`
+                  : `Installment #${targetPaymentRecord.installmentNumber || 1}`)
+              : 'this bill';
+            throw new BadRequestException({
+              error: 'INVALID_REGULAR_AMOUNT',
+              message: `Regular payment for ${billName} is Rs ${Math.round(unpaidOnNextBill).toLocaleString()}. To pay more, choose Balloon / Bulk.`,
+            });
+          }
           throw new BadRequestException({
             error: 'INVALID_REGULAR_AMOUNT',
             message: `Regular payment must be exactly what is still unpaid on the next bill (PKR ${Math.round(unpaidOnNextBill).toLocaleString()}).`,
@@ -1632,22 +1659,7 @@ export class ReceiptsService {
               status: p.status,
             }));
 
-          // Rule 8: If this is a re-upload of an already paid bill, only the extra above the bill is a balloon
-          let balloonAmount = Number(receipt.amount);
-          if (receipt.replacesReceiptId && receipt.paymentRecordId) {
-            const currentPr = await tx.paymentRecord.findUnique({
-              where: { id: receipt.paymentRecordId },
-            });
-            if (currentPr) {
-              const existingPaid = Number(currentPr.paidAmount || 0);
-              const needed = Math.max(0, Number(currentPr.amount) - existingPaid);
-              if (needed === 0) {
-                // Bill was already fully paid, only extra above bill applies to remaining balance
-                const billAmount = Number(currentPr.amount);
-                balloonAmount = Math.max(0, balloonAmount - billAmount);
-              }
-            }
-          }
+          const balloonAmount = Number(receipt.amount);
 
           if (balloonAmount > 0 && pendingInst.length > 0) {
             const engineResult = allocateBalloon(balloonAmount, pendingInst);
