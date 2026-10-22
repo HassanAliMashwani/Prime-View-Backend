@@ -11,6 +11,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import {
+  Prisma,
   PaymentType,
   FeeType,
   PaymentStatus,
@@ -245,13 +246,21 @@ export class CustomersService {
     const skip = (page - 1) * pageSize;
 
     return this.prisma.withScopedSession(session, async (tx) => {
-      const [total, customers] = await Promise.all([
-        tx.customer.count({ where: whereClause }),
-        tx.customer.findMany({
-          where: whereClause,
-          skip,
-          take: pageSize,
-          select: {
+      const total = await tx.customer.count({ where: whereClause });
+      if (total === 0) {
+        return {
+          customers: [],
+          total: 0,
+          page,
+          pageSize,
+        };
+      }
+
+      const customers = await tx.customer.findMany({
+        where: whereClause,
+        skip,
+        take: pageSize,
+        select: {
           id: true,
           membershipNo: true,
           fullName: true,
@@ -306,16 +315,56 @@ export class CustomersService {
                   },
                 },
               },
-              payments: {
-                where: { feeType: { in: ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'] } },
-                select: { feeType: true, status: true, paidAmount: true }
-              }
             }
           }
         },
         orderBy: { createdDate: 'desc' },
-      }),
-    ]);
+      });
+
+      const accessibleBookingIds: string[] = [];
+      for (const c of customers) {
+        for (const b of c.bookings) {
+          if (b.plot && (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId)))) {
+            accessibleBookingIds.push(b.id);
+          }
+        }
+      }
+
+      const paymentAggMap = new Map<string, {
+        billsCount: number;
+        totalPaid: number;
+        installmentsPaidCount: number;
+        installmentsDueCount: number;
+      }>();
+
+      if (accessibleBookingIds.length > 0) {
+        const aggs = await tx.$queryRaw<Array<{
+          bookingId: string;
+          billsCount: number;
+          totalPaid: number;
+          installmentsPaidCount: number;
+          installmentsDueCount: number;
+        }>>`
+          SELECT
+            "bookingId",
+            COUNT(*)::int AS "billsCount",
+            COALESCE(SUM(COALESCE("paidAmount", 0)), 0)::float AS "totalPaid",
+            COUNT(*) FILTER (WHERE "feeType" IN ('plot_installment', 'plot_biannual', 'plot_possession') AND "status" = 'paid')::int AS "installmentsPaidCount",
+            COUNT(*) FILTER (WHERE "feeType" IN ('plot_installment', 'plot_biannual', 'plot_possession') AND "status" != 'paid')::int AS "installmentsDueCount"
+          FROM "PaymentRecord"
+          WHERE "bookingId" IN (${Prisma.join(accessibleBookingIds)})
+            AND "feeType" IN ('plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession')
+          GROUP BY "bookingId"
+        `;
+        for (const row of aggs) {
+          paymentAggMap.set(row.bookingId, {
+            billsCount: Number(row.billsCount || 0),
+            totalPaid: Number(row.totalPaid || 0),
+            installmentsPaidCount: Number(row.installmentsPaidCount || 0),
+            installmentsDueCount: Number(row.installmentsDueCount || 0),
+          });
+        }
+      }
 
       const formattedCustomers = customers.map(c => {
         let plotCount = 0;
@@ -328,11 +377,13 @@ export class CustomersService {
         c.bookings.forEach(b => {
           if (b.plot && (session.role === 'super_admin' || (session.assignedBlocks && session.assignedBlocks.includes(b.plot.blockId)))) {
             plotCount++;
-            const billsCount = b.payments
-              ? b.payments.filter((p: any) =>
-                ['plot_installment', 'plot_one_time', 'plot_downpayment', 'plot_biannual', 'plot_possession'].includes(p.feeType),
-              ).length
-              : 0;
+            const agg = paymentAggMap.get(b.id) || {
+              billsCount: 0,
+              totalPaid: 0,
+              installmentsPaidCount: 0,
+              installmentsDueCount: 0,
+            };
+            const billsCount = agg.billsCount;
             const hasPaymentPlan = billsCount > 0;
             const savedPlan = b.installmentPlan as any;
             const savedPrice = Number(savedPlan?.totalPayment || b.plot.price || 0);
@@ -355,19 +406,11 @@ export class CustomersService {
               paperInstallmentRef: b.paperInstallmentRef,
             });
             const price = savedPrice;
-            const paid = b.payments.reduce((sum, p) => sum + Number(p.paidAmount || 0), 0);
+            const paid = agg.totalPaid;
             totalPaid += paid;
             outstandingTotal += Math.max(0, price - paid);
-
-            b.payments.forEach(p => {
-              if (['plot_installment', 'plot_biannual', 'plot_possession'].includes(p.feeType)) {
-                if (p.status === 'paid') {
-                  installmentsPaidCount++;
-                } else {
-                  installmentsDueCount++;
-                }
-              }
-            });
+            installmentsPaidCount += agg.installmentsPaidCount;
+            installmentsDueCount += agg.installmentsDueCount;
           }
         });
 
