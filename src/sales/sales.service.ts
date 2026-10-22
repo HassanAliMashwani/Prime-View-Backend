@@ -72,61 +72,15 @@ export class SalesService {
       }
 
       return await this.prisma.withScopedSession(session, async (tx) => {
-        // 2 & 3. Fetch admin users to resolve officer names and query live Booking rows in parallel
-        const [adminUsers, rawBookings] = await Promise.all([
-          tx.adminUser.findMany({
-            select: {
-              id: true,
-              username: true,
-              fullName: true,
-              role: true,
-            },
-          }),
-          tx.booking.findMany({
-            where: {
-              plot: {
-                status: { in: [PlotStatus.booked, PlotStatus.allotted] },
-              },
-              customer: {
-                id: { not: '' },
-              },
-            },
-            select: {
-              id: true,
-              bookingDate: true,
-              plotId: true,
-              paymentType: true,
-              installmentPlan: true,
-              createdByAdminId: true,
-              plot: {
-                select: {
-                  id: true,
-                  plotNumber: true,
-                  blockId: true,
-                  category: true,
-                  size: true,
-                  price: true,
-                  block: {
-                    select: {
-                      name: true,
-                    },
-                  },
-                },
-              },
-              customer: {
-                select: {
-                  id: true,
-                  fullName: true,
-                  membershipNo: true,
-                  registrationStatus: true,
-                },
-              },
-            },
-            orderBy: {
-              bookingDate: 'desc',
-            },
-          }),
-        ]);
+        // 2. Fetch admin users to resolve officer names
+        const adminUsers = await tx.adminUser.findMany({
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+            role: true,
+          },
+        });
 
         const adminMap = new Map<string, { id: string; username: string; fullName: string; role: 'super_admin' | 'sub_admin' }>();
         for (const u of adminUsers) {
@@ -135,6 +89,125 @@ export class SalesService {
           adminMap.set(u.id, info);
           adminMap.set(u.username, info);
         }
+
+        // 3. Build database where clause to push filters to PostgreSQL
+        const bookingWhere: any = {
+          plot: {
+            status: { in: [PlotStatus.booked, PlotStatus.allotted] },
+          },
+          customer: {
+            id: { not: '' },
+          },
+        };
+
+        if (assignedBlocks !== null) {
+          bookingWhere.plot.blockId = { in: assignedBlocks };
+        }
+
+        if (filters.blockId && filters.blockId !== 'all') {
+          bookingWhere.plot.blockId = filters.blockId;
+        }
+
+        if (filters.category && filters.category !== 'all') {
+          bookingWhere.plot.category = filters.category;
+        }
+
+        if (filters.paymentType && filters.paymentType !== 'all') {
+          bookingWhere.paymentType = filters.paymentType;
+        }
+
+        if (filters.adminId && filters.adminId !== 'all') {
+          const targetAdmin = adminMap.get(filters.adminId);
+          const targetIds = new Set<string>([filters.adminId]);
+          if (targetAdmin) {
+            targetIds.add(targetAdmin.id);
+            targetIds.add(targetAdmin.username);
+          }
+          bookingWhere.createdByAdminId = { in: Array.from(targetIds) };
+        }
+
+        if (filters.search && filters.search.trim()) {
+          const s = filters.search.trim();
+          bookingWhere.OR = [
+            { plot: { plotNumber: { contains: s, mode: 'insensitive' } } },
+            { customer: { fullName: { contains: s, mode: 'insensitive' } } },
+            { customer: { membershipNo: { contains: s, mode: 'insensitive' } } },
+          ];
+        }
+
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startOfTomorrow = new Date(startOfToday);
+        startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+        if (filters.datePreset && filters.datePreset !== 'all') {
+          if (filters.datePreset === 'today') {
+            bookingWhere.bookingDate = { gte: startOfToday, lt: startOfTomorrow };
+          } else if (filters.datePreset === 'yesterday') {
+            const startOfYesterday = new Date(startOfToday);
+            startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+            bookingWhere.bookingDate = { gte: startOfYesterday, lt: startOfToday };
+          } else if (filters.datePreset === 'last_7_days') {
+            const last7 = new Date(startOfToday);
+            last7.setDate(last7.getDate() - 7);
+            bookingWhere.bookingDate = { gte: last7 };
+          } else if (filters.datePreset === 'last_30_days') {
+            const last30 = new Date(startOfToday);
+            last30.setDate(last30.getDate() - 30);
+            bookingWhere.bookingDate = { gte: last30 };
+          } else if (filters.datePreset === 'this_month') {
+            const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+            bookingWhere.bookingDate = { gte: thisMonth };
+          }
+        } else if (filters.dateFrom || filters.dateTo) {
+          bookingWhere.bookingDate = bookingWhere.bookingDate || {};
+          if (filters.dateFrom) {
+            bookingWhere.bookingDate.gte = new Date(filters.dateFrom);
+          }
+          if (filters.dateTo) {
+            const to = new Date(filters.dateTo);
+            to.setDate(to.getDate() + 1);
+            bookingWhere.bookingDate.lt = to;
+          }
+        }
+
+        const rawBookings = await tx.booking.findMany({
+          where: bookingWhere,
+          select: {
+            id: true,
+            bookingDate: true,
+            plotId: true,
+            paymentType: true,
+            installmentPlan: true,
+            createdByAdminId: true,
+            plot: {
+              select: {
+                id: true,
+                plotNumber: true,
+                blockId: true,
+                category: true,
+                size: true,
+                price: true,
+                block: {
+                  select: {
+                    name: true,
+                  },
+                },
+              },
+            },
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                membershipNo: true,
+                registrationStatus: true,
+              },
+            },
+          },
+          orderBy: {
+            bookingDate: 'desc',
+          },
+        });
 
         // 4. One row per plot — deduplicate by plotId taking the latest booking
         const seenPlots = new Set<string>();
@@ -189,92 +262,7 @@ export class SalesService {
           };
         });
 
-        // 6. Apply filters to these live rows
-        // Scoping: assignedBlocks
-        let filtered = allItems;
-        if (assignedBlocks !== null) {
-          filtered = filtered.filter((item) => assignedBlocks!.includes(item.blockId));
-        }
-
-        // Block filter
-        if (filters.blockId && filters.blockId !== 'all') {
-          filtered = filtered.filter((item) => item.blockId === filters.blockId);
-        }
-
-        // Category filter
-        if (filters.category && filters.category !== 'all') {
-          filtered = filtered.filter((item) => item.category === filters.category);
-        }
-
-        // Payment type filter
-        if (filters.paymentType && filters.paymentType !== 'all') {
-          filtered = filtered.filter((item) => item.paymentType === filters.paymentType);
-        }
-
-        // Officer filter: matches admin id or username
-        if (filters.adminId && filters.adminId !== 'all') {
-          const targetAdmin = adminMap.get(filters.adminId);
-          const targetIds = new Set<string>([filters.adminId]);
-          if (targetAdmin) {
-            targetIds.add(targetAdmin.id);
-            targetIds.add(targetAdmin.username);
-          }
-          filtered = filtered.filter((item) => targetIds.has(item.sellerAdminId));
-        }
-
-        // Search filter: plot number, customer name, membership number
-        if (filters.search && filters.search.trim()) {
-          const s = filters.search.trim().toLowerCase();
-          filtered = filtered.filter(
-            (item) =>
-              item.plotNumber.toLowerCase().includes(s) ||
-              item.customerName.toLowerCase().includes(s) ||
-              (item.membershipNo && item.membershipNo.toLowerCase().includes(s))
-          );
-        }
-
-        // Date filter using booking date
-        const now = new Date();
-        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const startOfTomorrow = new Date(startOfToday);
-        startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
-
-        if (filters.datePreset && filters.datePreset !== 'all') {
-          if (filters.datePreset === 'today') {
-            filtered = filtered.filter((item) => {
-              const d = new Date(item.timestamp);
-              return d >= startOfToday && d < startOfTomorrow;
-            });
-          } else if (filters.datePreset === 'yesterday') {
-            const startOfYesterday = new Date(startOfToday);
-            startOfYesterday.setDate(startOfYesterday.getDate() - 1);
-            filtered = filtered.filter((item) => {
-              const d = new Date(item.timestamp);
-              return d >= startOfYesterday && d < startOfToday;
-            });
-          } else if (filters.datePreset === 'last_7_days') {
-            const last7 = new Date(startOfToday);
-            last7.setDate(last7.getDate() - 7);
-            filtered = filtered.filter((item) => new Date(item.timestamp) >= last7);
-          } else if (filters.datePreset === 'last_30_days') {
-            const last30 = new Date(startOfToday);
-            last30.setDate(last30.getDate() - 30);
-            filtered = filtered.filter((item) => new Date(item.timestamp) >= last30);
-          } else if (filters.datePreset === 'this_month') {
-            const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-            filtered = filtered.filter((item) => new Date(item.timestamp) >= thisMonth);
-          }
-        } else if (filters.dateFrom || filters.dateTo) {
-          if (filters.dateFrom) {
-            const from = new Date(filters.dateFrom);
-            filtered = filtered.filter((item) => new Date(item.timestamp) >= from);
-          }
-          if (filters.dateTo) {
-            const to = new Date(filters.dateTo);
-            to.setDate(to.getDate() + 1);
-            filtered = filtered.filter((item) => new Date(item.timestamp) < to);
-          }
-        }
+        const filtered = allItems;
 
         // 7. Calculate Counts & KPIs on the filtered live rows
         // - Filtered Units Sold = the number of rows.
