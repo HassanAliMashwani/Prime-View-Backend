@@ -678,7 +678,8 @@ export class ReceiptsService {
 
     const where: any = {};
     if (statusFilter && statusFilter !== 'all') {
-      where.status = statusFilter as ReceiptStatus;
+      const normalized = statusFilter === 'declined' ? 'rejected' : statusFilter;
+      where.status = normalized as ReceiptStatus;
     }
     if (search) {
       where.OR = [
@@ -697,50 +698,52 @@ export class ReceiptsService {
 
     let total = 0;
     const enriched = await this.prisma.withScopedSession(session, async (tx) => {
-      const [totalCount, receipts] = await Promise.all([
-        tx.receiptSubmission.count({ where }),
-        tx.receiptSubmission.findMany({
-          where,
-          skip,
-          take,
-          select: {
-            id: true,
-            customerId: true,
-            bookingId: true,
-            paymentRecordId: true,
-            depositoryBank: true,
-            transactionRef: true,
-            paymentDate: true,
-            amount: true,
-            paymentKind: true,
-            status: true,
-            verifiedByAdminId: true,
-            verifiedAt: true,
-            rejectionReason: true,
-            slipNumber: true,
-            slipNumberFormatVersion: true,
-            verificationToken: true,
-            qrTarget: true,
-            securityHash: true,
-            uploadedAt: true,
-            replacesReceiptId: true,
-            issuedByNameSnapshot: true,
-            customer: {
-              select: {
-                id: true,
-                fullName: true,
-                membershipNo: true,
-                phone: true,
-                cnic: true,
-                strikeCount: true,
-                fatherOrHusbandName: true,
-              },
+      const totalCount = await tx.receiptSubmission.count({ where });
+      total = totalCount;
+      if (totalCount === 0) {
+        return [];
+      }
+
+      const receipts = await tx.receiptSubmission.findMany({
+        where,
+        skip,
+        take,
+        select: {
+          id: true,
+          customerId: true,
+          bookingId: true,
+          paymentRecordId: true,
+          depositoryBank: true,
+          transactionRef: true,
+          paymentDate: true,
+          amount: true,
+          paymentKind: true,
+          status: true,
+          verifiedByAdminId: true,
+          verifiedAt: true,
+          rejectionReason: true,
+          slipNumber: true,
+          slipNumberFormatVersion: true,
+          verificationToken: true,
+          qrTarget: true,
+          securityHash: true,
+          uploadedAt: true,
+          replacesReceiptId: true,
+          issuedByNameSnapshot: true,
+          customer: {
+            select: {
+              id: true,
+              fullName: true,
+              membershipNo: true,
+              phone: true,
+              cnic: true,
+              strikeCount: true,
+              fatherOrHusbandName: true,
             },
           },
-          orderBy: { uploadedAt: 'desc' },
-        }),
-      ]);
-      total = totalCount;
+        },
+        orderBy: { uploadedAt: 'desc' },
+      });
 
       const adminIds = [...new Set(receipts.map((r) => r.verifiedByAdminId).filter(Boolean))] as string[];
       let adminMap = new Map<string, { fullName: string; username: string }>();
@@ -752,18 +755,44 @@ export class ReceiptsService {
         admins.forEach((a) => adminMap.set(a.id, a));
       }
 
-      const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))];
-      const bookings = await tx.booking.findMany({
-        where: { id: { in: bookingIds } },
-        include: { plot: { include: { block: true } } },
-      });
-      const bookingMap = new Map(bookings.map((b) => [b.id, b]));
+      const bookingIds = [...new Set(receipts.map((r) => r.bookingId).filter(Boolean))] as string[];
+      let bookingMap = new Map<string, any>();
+      if (bookingIds.length > 0) {
+        const bookings = await tx.booking.findMany({
+          where: { id: { in: bookingIds } },
+          select: {
+            id: true,
+            paymentType: true,
+            plot: {
+              select: {
+                id: true,
+                plotNumber: true,
+                size: true,
+                category: true,
+                blockId: true,
+                block: {
+                  select: { name: true },
+                },
+              },
+            },
+          },
+        });
+        bookingMap = new Map(bookings.map((b) => [b.id, b]));
+      }
 
       const paymentRecordIds = [...new Set(receipts.map((r) => r.paymentRecordId).filter(Boolean) as string[])];
-      const paymentRecords = await tx.paymentRecord.findMany({
-        where: { id: { in: paymentRecordIds } },
-      });
-      const paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
+      let paymentRecordMap = new Map<string, any>();
+      if (paymentRecordIds.length > 0) {
+        const paymentRecords = await tx.paymentRecord.findMany({
+          where: { id: { in: paymentRecordIds } },
+          select: {
+            id: true,
+            feeType: true,
+            installmentNumber: true,
+          },
+        });
+        paymentRecordMap = new Map(paymentRecords.map((p) => [p.id, p]));
+      }
 
       const receiptIds = receipts.map((r) => r.id);
       let photoMap = new Map<string, boolean>();
