@@ -171,30 +171,32 @@ export class AdminService {
       where.status = query.status.toLowerCase();
     }
 
-    const [subAdmins, total] = await this.prisma.withScopedSession(session, async (tx) => {
-      return Promise.all([
-        tx.adminUser.findMany({
-          where,
-          select: {
-            id: true,
-            username: true,
-            email: true,
-            fullName: true,
-            role: true,
-            status: true,
-            permissions: true,
-            createdDate: true,
-            lastLogin: true,
-            assignments: {
-              select: { blockId: true },
-            },
+    const { subAdmins, total } = await this.prisma.withScopedSession(session, async (tx) => {
+      const total = await tx.adminUser.count({ where });
+      if (total === 0) {
+        return { subAdmins: [], total: 0 };
+      }
+      const subAdmins = await tx.adminUser.findMany({
+        where,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          fullName: true,
+          role: true,
+          status: true,
+          permissions: true,
+          createdDate: true,
+          lastLogin: true,
+          assignments: {
+            select: { blockId: true },
           },
-          orderBy: { createdDate: 'asc' },
-          skip,
-          take: pageSize,
-        }),
-        tx.adminUser.count({ where }),
-      ]);
+        },
+        orderBy: { createdDate: 'asc' },
+        skip,
+        take: pageSize,
+      });
+      return { subAdmins, total };
     });
 
     const formatted = subAdmins.map((u) => {
